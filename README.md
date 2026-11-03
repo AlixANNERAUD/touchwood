@@ -53,32 +53,30 @@ Working assumption: **the microphone carries most of the information and the IMU
 
 Single-node pipeline, which runs on each board:
 
-```
-Mic (PDM, 16 kHz) ──► energy threshold (always-on, near-zero cost)
-                          │ tap detected
-                          ▼
-       capture window: ~50 ms audio + ~100 ms IMU (aligned on onset)
-                          │
-           ┌──────────────┴──────────────┐
-     Audio branch                   IMU branch
-     (Conv1D on raw / log-mel)      (Conv1D on 6 axes)
-           └──────────────┬──────────────┘
-                 fusion → Dense → zone id / embedding
+```mermaid
+flowchart TD
+    MIC["Mic (PDM, 16 kHz)"] --> TRIG{"energy threshold<br/>always-on, near-zero cost"}
+    IMU["IMU (~1 kHz)"] --> WIN
+    TRIG -- tap detected --> WIN["capture window<br/>~50 ms audio + ~100 ms IMU, aligned on onset"]
+    WIN --> AE["audio encoder<br/>(Conv on raw waveform)"]
+    WIN --> IE["IMU encoder<br/>(Conv on 6 axes)"]
+    AE & IE --> F["fusion head → zone id<br/>(or embedding sent to the other board)"]
+    TRIG -- no tap --> SLEEP["sleep"]
 ```
 
 The board sleeps between taps, which gives us an energy-per-inference argument.
 
 ### 3.1 Two-board setup
 
-```
-   ┌──────────────── table (top view) ────────────────┐
-   │ [B] secondary                         [A] main   │
-   │                ·  ·  ·                           │
-   │                ·  ·  ·   tap zones               │
-   │                ·  ·  ·                           │
-   └──────────────────────────────────────────────────┘
-   B ──BLE (raw / embedding / logits)──► A ──serial / BLE──► Raspberry Pi
-   (optional wire A↔B: GPIO sync pulse for µs-level alignment)
+```mermaid
+flowchart LR
+    subgraph T["Table (top view)"]
+        direction LR
+        B["Board B<br/>secondary"] ~~~ Z["3×3 tap zones"] ~~~ A["Board A<br/>main"]
+    end
+    B -- "BLE: raw window / embedding / logits" --> A
+    A -- "serial / BLE: zone id" --> PI["Raspberry Pi<br/>(demo)"]
+    A <-. "optional GPIO sync wire<br/>(µs alignment, for TDOA)" .-> B
 ```
 
 Put the boards at **opposite ends of the long axis** (or diagonally): the further apart they are, the stronger the cues.
@@ -109,25 +107,39 @@ To measure for each strategy: accuracy, bytes on air, radio energy, end-to-end l
 
 A third board would make 2D TDOA possible. That is a stretch goal, not the baseline.
 
-### 3.2 Model architecture (planned)
+### 3.2 Model architecture
 
 Shaped by MicroFlow's operator set (see [§7](#7-firmware-rust)). Since there is no Concat op, there is **one model per branch, and the fusion happens in Rust**, which also matches the BLE split-computing design.
 
+```mermaid
+flowchart LR
+    subgraph AE["audio encoder · shared by both boards · ~6 k params"]
+        direction TB
+        a0["raw audio (1, 800, 1)<br/>50 ms @ 16 kHz, peak-normalised"] --> a1["Conv 1×9, 16, stride 2 + BN + ReLU"]
+        a1 --> a2["Conv 1×5, 32, stride 2 + BN + ReLU"]
+        a2 --> a3["DWConv 1×5 + AvgPool ÷2 + Conv 1×1, 32  ×2"]
+        a3 --> a4["AvgPool (full width) → 32-d"]
+    end
+    subgraph IE["IMU encoder · shared · ~2 k params"]
+        direction TB
+        i0["IMU (1, 100, 6)"] --> i1["Conv 1×5, 16 + BN + ReLU"]
+        i1 --> i2["Conv 1×5, 16, stride 2 + BN + ReLU"]
+        i2 --> i3["AvgPool (full width) → 16-d"]
+    end
+    a4 --> CAT
+    LE["loge = log10(peak + 1) / 4.5"] --> CAT
+    i3 --> CAT
+    CAT["concat in Rust, per board:<br/>[audio 32 | loge 1 | imu 16] × 2 boards = 98"] --> H
+    subgraph H["fusion head · ~3.5 k params"]
+        direction TB
+        h1["Dense 32 + ReLU"] --> h2["Dense n_zones + Softmax"]
+    end
 ```
-Per board:
- Raw audio: 50 ms @ 16 kHz → input (1, 800, 1) int8
-   Conv 1×9,  16 filters, stride 2, ReLU        ─┐ learned filterbank on the raw signal
-   Conv 1×5,  32 filters, stride 2, ReLU         │ (keeps arrival delays and echoes,
-   [DWConv 1×5 + Conv 1×1, 32] × 2, stride 2     │  no FFT on the MCU)
-   AvgPool (full width) → 32-d embedding        ─┘
- IMU: ~100 ms, 6 axes → input (1, ~100, 6)
-   Conv 1×5, 16, ReLU → Conv 1×5, 32, stride 2 → AvgPool → 16-d embedding
 
-Fusion head (separate model, concatenation done in Rust):
-   [audio_A | imu_A | (audio_B | imu_B over BLE)] → Dense 32 ReLU → Dense n_zones → Softmax
-```
-
-- **Student:** ~5–15 k parameters, so a few tens of KB of flash in int8. The peak activation memory is a few KB.
+- **Student:** ~12 k parameters (audio encoder 6 k, IMU encoder 2 k, head 3.5 k). Trained on synthetic data, then exported and compiled with MicroFlow: ~11 KB of int8 weights plus ~17 KB of code, for the whole pipeline.
+- **Downsampling in the depthwise blocks** is an `AveragePooling2D((1, 2))` after a stride-1 depthwise conv, because TensorFlow cannot train a `DepthwiseConv2D` with unequal strides like `(1, 2)` on CPU.
+- **Per-board normalisation:** each board normalises its window by its own peak, so it can run its encoder alone. The peak is kept as a `loge` feature, so the head still sees the energy ratio between boards.
+- **Training strategy** (`host/notebooks/02_training.ipynb`): **joint end-to-end training**, plus auxiliary per-branch classifiers and *branch dropout* (randomly zeroing a whole modality or board) against modality competition. This also makes the head robust to a missing board. The encoders are **frozen only for few-shot calibration** on a new session, for fair comparisons of fusion strategies, and for part-by-part compression. On synthetic data, calibrating with 5 taps per zone: frozen encoders 99.9 % vs. everything unfrozen 96.5 %, because the unfrozen model overfits.
 - **Teacher** (trained on PC / Jetson): the same structure, 4–8× wider and deeper, with residual connections. It can take a spectrogram as input and early-fuse the raw data of both boards. It is then distilled into the student.
 - **Calibration variant:** the same extractors, with an L2-normalised embedding and nearest-prototype classification instead of the last Dense layer.
 - **Ablations:** raw waveform vs. log-mel input, one vs. two boards, with vs. without IMU.
@@ -267,6 +279,18 @@ Lives in [`firmware/`](firmware/), a Cargo workspace with three crates: `board` 
 
 `host/scripts/export_microflow.py` applies all of this and checks the op set.
 
+**MicroFlow contribution candidates**, by expected value for this project. Measure first: time each layer on the board with the DWT cycle counter before choosing.
+
+| Contribution | Gain | Why it matters here |
+|---|---|---|
+| SIMD int8 kernels (Cortex-M4 DSP: `SMLAD`, dual 16-bit MAC), as in CMSIS-NN | **latency / energy**, likely the biggest | MicroFlow's kernels are generic nalgebra loops. The audio encoder costs ~0.77 M MAC per tap (IMU 0.1 M, head 3.7 k, per the TFLite converter): at a few cycles per MAC on a 64 MHz M4, that is tens of ms, *to be measured*. CMSIS-NN reports several-fold speed-ups over reference kernels on the M4 |
+| `CONCATENATION` + `ADD` | expressiveness | In-graph fusion instead of Rust glue; residual / inverted-residual blocks (MobileNetV2-style), so the student can look more like the teacher |
+| `MAX_POOL_2D` | accuracy / latency | Taps are transients: max pooling keeps peaks, and it is cheaper than strided convolutions for downsampling |
+| Per-channel quantization for `FULLY_CONNECTED` | accuracy | It is TensorFlow's default nowadays; per-tensor costs accuracy on small Dense layers |
+| `EXPAND_DIMS` / `SQUEEZE`, `MEAN` | ergonomics | Plain Keras `Conv1D` and `GlobalAveragePooling` would just work |
+| Static arena / in-place activations instead of the stack | RAM | Needed for bigger models or a higher sample rate |
+| Bug: an all-zero bias makes the macro panic (`idx < self.len()`) | robustness | Easy first PR: treat a missing bias as zeros |
+
 ---
 
 ## 8. Host (Python)
@@ -293,9 +317,9 @@ firmware/                Rust, runs on the Nano 33 BLE Sense (Cargo workspace)
     models/tap.tflite    exported by host/scripts/export_microflow.py
   scripts/flash.sh       cargo runner: objcopy + 1200 baud touch + bossac
 host/                    Python, runs on the PC (uv project)
-  src/touchwood/         shared code: serial protocol decoder, tap segmentation
+  src/touchwood/         shared code: protocol, taps, dataset, model, export
   scripts/               record.py, export_microflow.py, tflite_ops.py
-  notebooks/             01_feasibility.ipynb, then training / compression
+  notebooks/             01_feasibility.ipynb, 02_training.ipynb, then distillation / compression
   data/raw/              recordings (git-ignored)
 ```
 

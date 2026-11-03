@@ -85,6 +85,7 @@ TODO: stream the IMU (after checking the board revision), and add a sync input p
 ## inference: MicroFlow
 
 - [`inference/models/tap.tflite`](inference/models/tap.tflite) is a **placeholder** (random weights) exported by `host/scripts/export_microflow.py`.
+- `host/notebooks/02_training.ipynb` exports the real pipeline as three models into `inference/models/`: `audio_encoder.tflite`, `imu_encoder.tflite` and `head.tflite`. All three compile with MicroFlow (checked: ~11 KB of int8 weights plus ~17 KB of code). They are not wired into `inference` yet.
 - Re-exporting rebuilds the firmware automatically, through `build.rs`.
 - The model path in `#[model(...)]` is relative to the **workspace root**: MicroFlow reads it from rustc's working directory.
 - The op-set constraints are listed in the root README (§7). The export script checks them.

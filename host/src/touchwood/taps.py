@@ -39,3 +39,27 @@ def cut_windows(x: np.ndarray, onsets: np.ndarray, length: int = 800, pre: int =
     """Windows of `length` samples starting `pre` samples before each onset (edges skipped)."""
     out = [x[o - pre : o - pre + length] for o in onsets if o - pre >= 0 and o - pre + length <= len(x)]
     return np.stack(out) if out else np.empty((0, length), dtype=x.dtype)
+
+
+def pair_onsets(a: np.ndarray, b: np.ndarray, fs: int = 16_000, tol_s: float = 0.03) -> np.ndarray:
+    """Match the same taps seen by two boards recorded at the same time on separate ports.
+
+    The two recordings start at slightly different times, so their onsets differ by an unknown
+    offset. Taps are irregular, so the offset that lines up the most onsets is the right one:
+    try every pairwise difference, keep the one with the most matches within `tol_s`.
+    Returns an (n, 2) array of matched onset indices (a, b).
+    """
+    if len(a) == 0 or len(b) == 0:
+        return np.empty((0, 2), dtype=int)
+    tol = tol_s * fs
+    best, best_offset = -1, 0
+    for offset in np.unique((b[None, :] - a[:, None]).ravel()):
+        hits = np.sum(np.min(np.abs(b[None, :] - (a[:, None] + offset)), axis=1) <= tol)
+        if hits > best:
+            best, best_offset = hits, offset
+    pairs = []
+    for i in a:
+        j = np.argmin(np.abs(b - (i + best_offset)))
+        if abs(b[j] - (i + best_offset)) <= tol:
+            pairs.append((i, b[j]))
+    return np.asarray(pairs, dtype=int).reshape(-1, 2)
