@@ -38,7 +38,7 @@ Working assumption: **the microphone carries most of the information and the IMU
 | Device | Role |
 |---|---|
 | 2× Arduino Nano 33 BLE **Sense** (nRF52840, Cortex-M4F @ 64 MHz, **1 MB flash / 256 KB RAM**) ✅ confirmed | Target: always-on sensing and inference. One board is the *main* node, the other is a *secondary* node. |
-| Other Arduino Nano boards (exact model **TBD**) | If it is a Nano ESP32, it could be used for Wi-Fi CSI (see [§10](#10-parked-ideas)) |
+| Other Arduino Nano boards (exact model **TBD**) | If it is a Nano ESP32, it could be used for Wi-Fi CSI (see [§10](#11-parked-ideas)) |
 | Raspberry Pi | Host for the demo (receives zone events), cross-platform benchmark |
 | Jetson Nano | Teacher training / inference, TensorRT benchmark |
 | *(optional)* piezo disc(s) on an analog pin | Plan B contact microphone; two of them would allow real time-difference-of-arrival (TDOA) |
@@ -218,7 +218,27 @@ Swap and review each other's work regularly.
 
 ---
 
-## 8. Proposed repo layout
+## 8. Python environment
+
+Managed with [uv](https://docs.astral.sh/uv/), on Python 3.13.
+
+```sh
+uv sync                     # create .venv and install everything (incl. dev group)
+uv run jupyter lab          # or select the .venv kernel in VS Code
+uv run ruff check .         # lint
+```
+
+`tensorflow-model-optimization` (pruning / clustering) needs legacy Keras. Set this **before** importing TensorFlow:
+
+```python
+import os
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
+import tensorflow as tf
+```
+
+---
+
+## 9. Proposed repo layout
 
 ```
 firmware/
@@ -236,7 +256,7 @@ report/
 
 ---
 
-## 9. References
+## 10. References
 
 - Knock&Tap: classification and localisation of knock and tap gestures (4-mic array): <https://pure.seoultech.ac.kr/en/publications/knockamptap-classification-and-localization-of-knock-and-tap-gest/>
 - MIT, Passive acoustic sensing for tracking knocks on large displays: <https://aspirin.media.mit.edu/responsive/wp-content/uploads/sites/4/2013/12/Passive-Acoustic-Sensing-for-Tracking-Knocks-Atop-Large-Interactive-Displays.pdf>
@@ -250,7 +270,7 @@ report/
 
 ---
 
-## 10. Parked ideas
+## 11. Parked ideas
 
 Not in the plan, kept here for reference.
 

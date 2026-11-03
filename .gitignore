@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Data and artefacts (large files: keep out of git or use LFS)
+data/raw/
+*.h5
+*.keras
+*.zip
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
