@@ -5,11 +5,13 @@ description = "Tap localisation on a table with TinyML on Arduino Nano 33 BLE Se
 authors = [
     { name = "Alix ANNERAUD", email = "alix@anneraud.fr" }
 ]
-requires-python = ">=3.13"
+# TensorFlow 2.21 ships wheels up to CPython 3.13 only.
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "ipykernel>=7.4.0",
+    "jupyterlab>=4.3",
     "matplotlib>=3.11.2",
-    "numpy>=2.5.4",
+    "numpy>=2.5.4,<3",
     "pandas>=3.1.0",
     "pyserial>=3.5",
     "scikit-learn>=1.9.1",
@@ -20,7 +22,33 @@ dependencies = [
     "tf-keras>=2.21.0",
 ]
 
+[project.optional-dependencies]
+cpu = ["torch>=2.3,<3"]
+cuda = ["torch>=2.3,<3"]
+# Apple Metal (MPS): only available when running natively on macOS, not in a Linux VM.
+mps = ["torch>=2.3,<3 ; sys_platform == 'darwin'"]
+
 [dependency-groups]
 dev = [
     "ruff>=0.17.3",
 ]
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }, { extra = "mps" }]]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu126", extra = "cuda" },
+    # mps: default PyPI wheel, whose macOS arm64 build ships with MPS support.
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

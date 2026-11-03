@@ -220,10 +220,14 @@ Swap and review each other's work regularly.
 
 ## 8. Python environment
 
-Managed with [uv](https://docs.astral.sh/uv/), on Python 3.13.
+Managed with [uv](https://docs.astral.sh/uv/), on **Python 3.13**. Python 3.14+ is not an option yet: TensorFlow, ExecuTorch and the PyTorch→TFLite converter (LiteRT Torch) have no wheels for it, and LiteRT Torch has no Linux aarch64 wheels at all.
+
+PyTorch is an extra, so pick exactly one:
 
 ```sh
-uv sync                     # create .venv and install everything (incl. dev group)
+uv sync --extra cpu         # CPU-only PyTorch (Linux / Windows, incl. aarch64)
+uv sync --extra cuda        # NVIDIA GPU, CUDA 12.6 wheels (x86_64)
+uv sync --extra mps         # Apple Silicon, native macOS only
 uv run jupyter lab          # or select the .venv kernel in VS Code
 uv run ruff check .         # lint
 ```
