@@ -1,6 +1,6 @@
 # touchwood
 
-> Turn any table into a touch surface: an Arduino Nano 33 BLE Sense stuck under a table recognises **where** you tapped, using a compressed neural network running on the microcontroller.
+> Turn any table into a touch surface: two Arduino Nano 33 BLE Sense boards stuck under a table recognise **where** you tapped, using compressed neural networks running on the microcontrollers and talking over BLE.
 
 **Status:** internal working notes, early stage. Nothing here is final.
 
@@ -10,7 +10,7 @@ Course project for *IA embarquée* (Embedded AI), 2026–2027. Team of 2, about 
 
 ## 1. Idea
 
-One board, one microphone, one IMU, no triangulation. Every location on a surface leaves its own vibro-acoustic **fingerprint**, and a small CNN learns to recognise it. We frame the problem as **classification over zones**, starting with a 2×2 grid and moving to 3×3. Regression of (x, y) is a stretch goal.
+No triangulation is required. Every location on a surface leaves its own vibro-acoustic **fingerprint**, and a small CNN learns to recognise it. A **second board** at the other end of the table adds spatial cues, such as the energy ratio between the boards (see [§3.1](#31-two-board-setup)). We frame the problem as **classification over zones**, starting with a 2×2 grid and moving to 3×3. Regression of (x, y) is a stretch goal.
 
 The core of the project is to **fit the model onto the microcontroller**, applying as many techniques from the course as possible and measuring the effect of each one.
 
@@ -37,7 +37,8 @@ Working assumption: **the microphone carries most of the information and the IMU
 
 | Device | Role |
 |---|---|
-| Arduino Nano 33 BLE **Sense** (nRF52840, Cortex-M4F @ 64 MHz, **1 MB flash / 256 KB RAM**) | Target: always-on sensing and inference |
+| 2× Arduino Nano 33 BLE **Sense** (nRF52840, Cortex-M4F @ 64 MHz, **1 MB flash / 256 KB RAM**) ✅ confirmed | Target: always-on sensing and inference. One board is the *main* node, the other is a *secondary* node. |
+| Other Arduino Nano boards (exact model **TBD**) | If it is a Nano ESP32, it could be used for Wi-Fi CSI (see [§10](#10-parked-ideas)) |
 | Raspberry Pi | Host for the demo (receives zone events), cross-platform benchmark |
 | Jetson Nano | Teacher training / inference, TensorRT benchmark |
 | *(optional)* piezo disc(s) on an analog pin | Plan B contact microphone; two of them would allow real time-difference-of-arrival (TDOA) |
@@ -50,6 +51,8 @@ Working assumption: **the microphone carries most of the information and the IMU
 
 ## 3. Pipeline
 
+Single-node pipeline, which runs on each board:
+
 ```
 Mic (PDM, 16 kHz) ──► energy threshold (always-on, near-zero cost)
                           │ tap detected
@@ -60,13 +63,51 @@ Mic (PDM, 16 kHz) ──► energy threshold (always-on, near-zero cost)
      Audio branch                   IMU branch
      (Conv1D on raw / log-mel)      (Conv1D on 6 axes)
            └──────────────┬──────────────┘
-                 fusion → Dense → zone id
-                          │
-                          ▼
-              serial / BLE → Raspberry Pi (demo app)
+                 fusion → Dense → zone id / embedding
 ```
 
 The board sleeps between taps, which gives us an energy-per-inference argument.
+
+### 3.1 Two-board setup
+
+```
+   ┌──────────────── table (top view) ────────────────┐
+   │ [B] secondary                         [A] main   │
+   │                ·  ·  ·                           │
+   │                ·  ·  ·   tap zones               │
+   │                ·  ·  ·                           │
+   └──────────────────────────────────────────────────┘
+   B ──BLE (raw / embedding / logits)──► A ──serial / BLE──► Raspberry Pi
+   (optional wire A↔B: GPIO sync pulse for µs-level alignment)
+```
+
+Put the boards at **opposite ends of the long axis** (or diagonally): the further apart they are, the stronger the cues.
+
+**What the second board adds, from easiest to hardest:**
+
+1. **Inter-board energy ratio** ⭐. The closer board gets the stronger signal. The broadband and per-band energy ratios tell which side the tap was on and roughly how far.
+   - Only **coarse sync** is needed: we just have to match the same tap on both boards, within a few ms. BLE is enough.
+   - The cue **transfers across tables** much better than raw fingerprints, which helps the generalisation goal.
+2. **Two fingerprints instead of one.** Each board sees the tap from a different viewpoint, so they disambiguate each other.
+3. **Time difference of arrival (TDOA).** Flexural waves in wood travel at roughly a few hundred m/s and are dispersive. A 10 cm path difference is ~200 µs, or ~3 samples at 16 kHz.
+   - TDOA needs clocks aligned to **tens of µs**. ArduinoBLE jitter is around the **ms**, so it is unusable for this.
+   - With only 2 sensors, TDOA gives a hyperbola, not a point. It is still useful combined with the fingerprints.
+   - Options to get the sync:
+     - ✅ **A wire between the boards** (GPIO sync pulse). Trivial and near-perfect.
+     - 🧪 **nRF52840 radio timestamping**: wire the RADIO address event to a TIMER capture through PPI, which allows sub-µs sync over the air. This means leaving the Arduino BLE stack (Zephyr / Embassy / bare radio). It is a good fit for the Rust track.
+     - 💡 **A sync-free cue**: if the structure-vs-air arrival gap is confirmed (§1), each board measures its *own* distance to the tap. Two distances intersect as two circles, which gives a position without any inter-board sync.
+
+**Fusion strategies (distributed inference / split computing):** what does B send to A?
+
+| B sends | Payload | Trade-off |
+|---|---|---|
+| Raw window (50 ms @ 16 kHz, int16) | ~1.6 KB | Early fusion. Best accuracy potential, highest radio energy and latency. |
+| int8 embedding from B's feature extractor | ~32 B | **Split computing**: each node runs the extractor and A runs the fusion head. |
+| Per-zone probabilities (int8) | ~9 B | Late fusion. Cheapest, least expressive. |
+
+To measure for each strategy: accuracy, bytes on air, radio energy, end-to-end latency (tap → decision on A), and flash / RAM on each node.
+
+A third board would make 2D TDOA possible. That is a stretch goal, not the baseline.
 
 ### Generalising to a new table (stretch goal)
 
@@ -103,6 +144,8 @@ Checklist:
 - [ ] Pareto plot: accuracy vs. size, and accuracy vs. latency
 - [ ] Classical baseline: Location Template Matching (cross-correlation + k-NN) vs. CNN, comparing both accuracy and cost
 - [ ] Cross-platform benchmark of the same model: Arduino vs. Raspberry Pi vs. Jetson
+- [ ] Distributed inference over BLE: early vs. split (embedding) vs. late fusion (§3.1)
+- [ ] Ablations by sensor (board A only / board B only / A+B) and by modality (mic / IMU)
 
 ---
 
@@ -110,12 +153,17 @@ Checklist:
 
 ### Week 1: feasibility (go / no-go)
 
-- [ ] Identify the board revision; get mic and IMU streaming over serial at the highest usable rates.
-- [ ] Data logger: firmware that streams raw samples, plus a Python script that saves labelled taps.
-- [ ] Record **4 corners × 30 taps** on one surface.
+- [ ] Identify the board revision (Rev1 / Rev2) of both Sense boards; get mic and IMU streaming over serial at the highest usable rates.
+- [ ] Data logger: firmware that streams raw samples, plus a Python script that saves labelled taps from **both boards at once** (both on USB).
+  - PC-side alignment is fine for energy ratios and fingerprints, but **not** for TDOA, because of USB jitter.
+  - If we want to test TDOA, add the GPIO sync wire from day one.
+- [ ] Record **4 corners × 30 taps** on one surface, with the boards at opposite ends.
 - [ ] Plot spectrograms and gyroscope traces per zone. Can we see a difference by eye?
-- [ ] Quick k-NN / random forest on **mic only**, **IMU only** and **both**.
-- **Go** if above ~90 % on 4 zones. **Otherwise**, try a lighter surface or a piezo, or pivot.
+- [ ] Quick k-NN / random forest on:
+  - **board A only**, **board B only** and **A+B** (energy ratio plus both feature sets);
+  - **mic only**, **IMU only** and **both**.
+- **Go** if above ~90 % on 4 zones. **Adopt the two-board setup** if A+B clearly beats a single board. **Otherwise**, try a lighter surface or a piezo, or pivot.
+- [ ] Minimal BLE link (ArduinoBLE): B notifies A with a small payload on each tap. Measure the latency.
 - [ ] TFLite Micro "hello world" running on the board.
 
 ### Week 2: data and first models
@@ -128,7 +176,8 @@ Checklist:
 ### Week 3: compression
 
 - [ ] Distillation, then pruning, SVD, clustering and QAT, filling the ablation table.
-- [ ] Per-modality ablation (mic / IMU / both).
+- [ ] Per-modality ablation (mic / IMU / both) and per-board ablation (A / B / A+B).
+- [ ] Fusion strategies over BLE (raw / embedding / logits): accuracy vs. bytes vs. energy vs. latency.
 - [ ] *(stretch)* Multi-surface dataset and embedding plus on-device calibration.
 
 ### Week 4: integration and report
@@ -153,6 +202,8 @@ Swap and review each other's work regularly.
 | IMU signal too weak for direction | Lighter surface, knuckle taps, piezo plan B, accept a mic-only model |
 | Fingerprint drift (objects on table, board moved) | Varied data, augmentation, few-shot calibration (stretch) |
 | Mic / IMU synchronisation (different rates, I²C latency) | Align both windows on the detected onset; use the IMU FIFO |
+| Inter-board sync too poor for TDOA (BLE jitter ~ms) | Rely on energy ratio and fingerprints, which only need coarse sync; GPIO sync wire; radio timestamping as a stretch goal |
+| BLE link adds latency or drops packets | Late fusion fallback (A decides alone if B's message is late); measure the end-to-end latency |
 | Model already tiny, so little left to compress | Start from a deliberately large teacher; report the full trade-off curve |
 | Rust toolchain eats the schedule | C++ / TFLite Micro is the reference path; Rust is a parallel track, not a blocker |
 
@@ -194,3 +245,24 @@ report/
 - Burn, `no_std` mode: <https://burn.dev/books/burn/advanced/no-std.html>
 - Zephyr board notes for the Nano 33 BLE (flashing, bossac): <https://developer.nordicsemi.com/nRF_Connect_SDK/doc-legacy/1.6.1/zephyr/boards/arm/arduino_nano_33_ble/doc/index.html>
 - Course material: TinyML, quantization, pruning / clustering (TP3), knowledge distillation (TP4)
+- WiFinger, fine-grained finger gesture recognition with Wi-Fi: <https://arxiv.org/abs/2106.00857>
+- Espressif TFLite Micro port with ESP-NN kernels: <https://github.com/espressif/esp-tflite-micro>
+
+---
+
+## 10. Parked ideas
+
+Not in the plan, kept here for reference.
+
+- **BLE "radar" with the Nano's radio.** Not viable.
+  - Range resolution is c / 2B: ~75 m for one 2 MHz BLE channel, ~1.9 m across the whole 80 MHz band.
+  - The nRF52840 only reports RSSI. It supports neither AoA/AoD direction finding nor BLE 6.0 Channel Sounding (those are on the nRF52833 / nRF5340 and nRF54L series).
+  - A multi-channel RSSI fingerprint of the *arm* position might separate left from right. That would be a possible negative-result experiment at most.
+- **Wi-Fi CSI with ESP32 boards** (Nano ESP32 / ESP32-S3).
+  - CSI gives ~52 subcarriers (amplitude + phase) per packet, which is far richer than RSSI. It senses the *hand / arm position*, not the tap itself, so it complements the vibration sensing (vibrations tell *when* the tap happened, CSI tells *where* the hand is).
+  - Place TX and RX on opposite sides of the table so the hand crosses the first Fresnel zone (radius ~18 cm at mid-link for 1 m at 2.4 GHz).
+  - Downsides: very sensitive to the environment (people moving, posture), and it doubles the acquisition chain.
+  - If we try it, run the same week-1 test on CSI only.
+  - An alternative without new hardware is Nexmon CSI on a Raspberry Pi 3B+ / 4.
+- **Magnetic stylus + magnetometer**: a real localisation technique, but short range (~10–20 cm) and it changes the concept.
+- **Capacitive electrodes** (copper tape under the table): proximity sensing at a few cm range; it needs several electrodes to localise.
