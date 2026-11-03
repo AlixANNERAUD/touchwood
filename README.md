@@ -38,7 +38,7 @@ Working assumption: **the microphone carries most of the information and the IMU
 | Device | Role |
 |---|---|
 | 2× Arduino Nano 33 BLE **Sense** (nRF52840, Cortex-M4F @ 64 MHz, **1 MB flash / 256 KB RAM**) ✅ confirmed | Target: always-on sensing and inference. One board is the *main* node, the other is a *secondary* node. |
-| Other Arduino Nano boards (exact model **TBD**) | If it is a Nano ESP32, it could be used for Wi-Fi CSI (see [§10](#11-parked-ideas)) |
+| Other Arduino Nano boards (exact model **TBD**) | If it is a Nano ESP32, it could be used for Wi-Fi CSI (see [§11](#11-parked-ideas)) |
 | Raspberry Pi | Host for the demo (receives zone events), cross-platform benchmark |
 | Jetson Nano | Teacher training / inference, TensorRT benchmark |
 | *(optional)* piezo disc(s) on an analog pin | Plan B contact microphone; two of them would allow real time-difference-of-arrival (TDOA) |
