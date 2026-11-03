@@ -15,7 +15,7 @@ uv run ruff check .
 | `src/touchwood/dataset.py` | Recordings → tap dataset, synthetic stand-in, and `prepare()`, the input normalisation the firmware must reproduce |
 | `src/touchwood/model.py` | Shared encoders + fusion head (MicroFlow-compatible), branch dropout, export helpers |
 | `src/touchwood/export.py` | int8 TFLite conversion with the MicroFlow options, op-set check, and a PC runner for int8 models |
-| `scripts/record.py` | Record a labelled session from a board → `data/raw/<session>/<board>_<label>_<time>.npz` |
+| `scripts/record.py` | Guided recording from one or two boards at once: random zone order, tap counting, quality checks, session log (`takes.csv`) |
 | `scripts/export_microflow.py` | Keras → int8 `.tflite` that MicroFlow accepts, written to `firmware/inference/models/` |
 | `scripts/tflite_ops.py` | List the operators and shapes of `.tflite` files |
 | `notebooks/01_feasibility.ipynb` | Week-1 go / no-go: tap segmentation, plots, k-NN / random forest per zone |
@@ -23,13 +23,11 @@ uv run ruff check .
 
 ## Recording a dataset
 
+Follow **[DATASET.md](DATASET.md)**: setup, tapping protocol, session plan, quality checks. In short:
+
 ```sh
-# acquisition firmware flashed (cd ../firmware && cargo run --release -p acquisition)
-uv run python scripts/record.py --label z0 --seconds 30     # tap ~30 times on zone 0
-uv run python scripts/record.py --label z1 --seconds 30
-...
-uv run python scripts/record.py --label noise --seconds 30  # no taps: background / negatives
-# second board: --board B --port /dev/ttyACM1
+uv run python scripts/record.py --session 20261110_desk1_s1 --ports A=/dev/ttyACM0,B=/dev/ttyACM1 \
+    --zones 9 --taps 25 --condition finger --operator alix
 ```
 
 ## TensorFlow notes

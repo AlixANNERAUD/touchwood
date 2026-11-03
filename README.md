@@ -203,7 +203,7 @@ Checklist:
   - ✅ Written, *not yet tested on hardware*: `firmware/acquisition` (continuous mic) + `host/scripts/record.py`. IMU streaming is still TODO.
   - PC-side alignment is fine for energy ratios and fingerprints, but **not** for TDOA, because of USB jitter.
   - If we want to test TDOA, add the GPIO sync wire from day one.
-- [ ] Record **4 corners × 30 taps** on one surface, with the boards at opposite ends.
+- [ ] Record **4 corners × 30 taps** on one surface, with the boards at opposite ends, following [`host/DATASET.md`](host/DATASET.md) (Phase 0).
 - [ ] Plot spectrograms and gyroscope traces per zone. Can we see a difference by eye? (`host/notebooks/01_feasibility.ipynb`)
 - [ ] Quick k-NN / random forest on:
   - **board A only**, **board B only** and **A+B** (energy ratio plus both feature sets);
@@ -215,7 +215,7 @@ Checklist:
 ### Week 2: data and first models
 
 - [ ] Onset detection and windowing (on PC first, then ported to firmware).
-- [ ] Dataset v1: 3×3 grid, varied tap force, finger vs. knuckle, several sessions or days, with and without objects on the table.
+- [ ] Dataset v1 ([`host/DATASET.md`](host/DATASET.md), Phase 1): 3×3 grid, finger and knuckle, ≥ 4 sessions varying one factor at a time (operator, day, objects on the table, boards re-glued). **Stream the IMU first.**
 - [ ] Teacher model (large, PC/Jetson) and baseline student.
 - [ ] Deployment pipeline and on-device measurement harness (latency, arena size, energy).
 

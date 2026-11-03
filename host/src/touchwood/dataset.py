@@ -50,38 +50,48 @@ def subset(d: dict, idx: np.ndarray) -> dict:
 # --------------------------------------------------------------------------- real recordings
 
 
-def load_recordings(root: Path, tol_s: float = 0.03) -> tuple[dict, list[str]]:
-    """Build a raw dataset from `scripts/record.py` outputs.
+def parse_name(path: Path) -> tuple[str, str, str]:
+    """`<board>_<label>_<stamp>.npz` -> (board, label, stamp). Labels may contain underscores."""
+    parts = path.stem.split("_")
+    return parts[0], "_".join(parts[1:-1]), parts[-1]
 
-    Files: <root>/<session>/<board>_<label>_<time>.npz. When both boards recorded the same
-    (session, label) at the same time, taps are paired across boards from their onset times
-    (the offset between the two recordings is estimated automatically). Labels named `noise`
-    are skipped. Returns (raw, sorted zone labels).
+
+def load_recordings(root: Path, tol_s: float = 0.03) -> tuple[dict, list[str]]:
+    """Build a raw dataset from `scripts/record.py` outputs (see host/DATASET.md).
+
+    Files: <root>/<session>/<board>_<label>_<stamp>.npz. Files of the same take (same session,
+    label and stamp) recorded by several boards at once are paired tap by tap from their
+    onset times (the offset between the two recordings is estimated automatically). Labels
+    starting with `noise` are skipped. Returns (raw, sorted zone labels).
     """
-    files = defaultdict(dict)
+    takes = defaultdict(dict)
     for path in sorted(Path(root).glob("*/*.npz")):
-        board, label = path.stem.split("_")[:2]
-        if label != "noise":
-            files[(path.parent.name, label)][board] = path
-    boards = sorted({b for per_board in files.values() for b in per_board})
-    labels = sorted({label for _, label in files})
+        board, label, stamp = parse_name(path)
+        if not label.startswith("noise"):
+            takes[(path.parent.name, label, stamp)][board] = path
+    boards = sorted({b for per_board in takes.values() for b in per_board})
+    labels = sorted({label for _, label, _ in takes})
     out = defaultdict(list)
-    for (session, label), per_board in sorted(files.items()):
+    for (session, label, stamp), per_board in sorted(takes.items()):
         if set(per_board) != set(boards):
-            print(f"skip {session}/{label}: boards {sorted(per_board)} instead of {boards}")
+            print(f"skip {session}/{label}_{stamp}: boards {sorted(per_board)} instead of {boards}")
             continue
         audio = {b: np.load(p)["audio"] for b, p in per_board.items()}
         onsets = {b: detect_onsets(x, FS) for b, x in audio.items()}
         if len(boards) == 2:
             pairs = pair_onsets(onsets[boards[0]], onsets[boards[1]], FS, tol_s)
             onsets = {boards[0]: pairs[:, 0], boards[1]: pairs[:, 1]}
-        windows = {b: cut_windows(audio[b], onsets[b], AUDIO_LEN, PRE) for b in boards}
-        n = min(len(w) for w in windows.values())  # windows too close to the edges are dropped
+        # Keep a tap only if its window fits in *every* board's recording, so that the
+        # boards stay aligned tap by tap.
+        ok = np.ones(len(onsets[boards[0]]), dtype=bool)
         for b in boards:
-            out[f"audio_{b}"].append(windows[b][:n])
+            ok &= (onsets[b] - PRE >= 0) & (onsets[b] - PRE + AUDIO_LEN <= len(audio[b]))
+        for b in boards:
+            out[f"audio_{b}"].append(cut_windows(audio[b], onsets[b][ok], AUDIO_LEN, PRE))
+        n = int(ok.sum())
         out["y"].append(np.full(n, labels.index(label)))
         out["group"].append(np.full(n, session))
-        print(f"{session}/{label}: {n} taps")
+        print(f"{session}/{label}_{stamp}: {n} taps")
     if not out:
         raise FileNotFoundError(f"no recordings under {Path(root).resolve()}")
     return {k: np.concatenate(v) for k, v in out.items()}, labels
