@@ -1,9 +1,12 @@
-# Python
+# Python (host/)
 .venv/
 __pycache__/
 *.py[cod]
 .ruff_cache/
 .ipynb_checkpoints/
+
+# Rust (firmware/)
+target/
 
 # Data and artefacts (large files: keep out of git or use LFS)
 data/raw/

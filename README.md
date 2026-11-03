@@ -43,7 +43,7 @@ Working assumption: **the microphone carries most of the information and the IMU
 | Jetson Nano | Teacher training / inference, TensorRT benchmark |
 | *(optional)* piezo disc(s) on an analog pin | Plan B contact microphone; two of them would allow real time-difference-of-arrival (TDOA) |
 
-**TODO:** check the board revision.
+**TODO:** check the board revision. The `acquisition` firmware detects it from the IMU and prints it when the port opens.
 - **Rev1**: LSM9DS1 IMU. The Arduino library defaults to ~119 Hz; it can go to 952 Hz by setting registers.
 - **Rev2**: BMI270 + BMM150. The accelerometer goes up to ~1.6 kHz and the gyroscope higher.
 
@@ -109,7 +109,40 @@ To measure for each strategy: accuracy, bytes on air, radio energy, end-to-end l
 
 A third board would make 2D TDOA possible. That is a stretch goal, not the baseline.
 
-### Generalising to a new table (stretch goal)
+### 3.2 Model architecture (planned)
+
+Shaped by MicroFlow's operator set (see [§7](#7-firmware-rust)). Since there is no Concat op, there is **one model per branch, and the fusion happens in Rust**, which also matches the BLE split-computing design.
+
+```
+Per board:
+ Raw audio: 50 ms @ 16 kHz → input (1, 800, 1) int8
+   Conv 1×9,  16 filters, stride 2, ReLU        ─┐ learned filterbank on the raw signal
+   Conv 1×5,  32 filters, stride 2, ReLU         │ (keeps arrival delays and echoes,
+   [DWConv 1×5 + Conv 1×1, 32] × 2, stride 2     │  no FFT on the MCU)
+   AvgPool (full width) → 32-d embedding        ─┘
+ IMU: ~100 ms, 6 axes → input (1, ~100, 6)
+   Conv 1×5, 16, ReLU → Conv 1×5, 32, stride 2 → AvgPool → 16-d embedding
+
+Fusion head (separate model, concatenation done in Rust):
+   [audio_A | imu_A | (audio_B | imu_B over BLE)] → Dense 32 ReLU → Dense n_zones → Softmax
+```
+
+- **Student:** ~5–15 k parameters, so a few tens of KB of flash in int8. The peak activation memory is a few KB.
+- **Teacher** (trained on PC / Jetson): the same structure, 4–8× wider and deeper, with residual connections. It can take a spectrogram as input and early-fuse the raw data of both boards. It is then distilled into the student.
+- **Calibration variant:** the same extractors, with an L2-normalised embedding and nearest-prototype classification instead of the last Dense layer.
+- **Ablations:** raw waveform vs. log-mel input, one vs. two boards, with vs. without IMU.
+- Since the student is already small, we also optimise for **latency and energy**, not only size. A higher PDM sample rate and longer windows would also make the model bigger (the nRF52840 PDM goes above 16 kHz; to be checked).
+
+### 3.3 Datasets
+
+**No public dataset matches**, and none can: the fingerprint depends on the table, the board and where it sits. We collect our own data, which is quick (9 zones × 50 taps × a few conditions ≈ 1–2 h). Related public material:
+
+- Low-energy impacts on a thin plastic plate, 4 corner PZT sensors (Univ. of Patras): [paper](https://deepai.org/publication/dataset-impact-events-for-structural-health-monitoring-of-a-plastic-thin-plate), [Zenodo](https://zenodo.org/record/7199346). Useful to prototype the pipeline or pre-train the teacher before our own data exists.
+- Surface-vibration gestures on a desk, 9,000 events including taps and knocks: [arXiv 2605.10110](https://arxiv.org/pdf/2605.10110). Check whether the data is released.
+- Background noise for augmentation and a "not a tap" class: ESC-50, FSD50K, MUSAN, DEMAND.
+- Method references without public data: [Knock&Tap](https://dl.acm.org/doi/fullHtml/10.1145/3461615.3485428), and [SurfaceVibe](https://dl.acm.org/doi/10.1145/3055031.3055077), which models dispersion and reflections on surfaces.
+
+### 3.4 Generalising to a new table (stretch goal)
 
 - **Baseline:** one model per surface, retrained for each surface.
 - **Stretch:** train an **embedding extractor** (prototypical network / metric learning) on data from 5–10 different surfaces. On a new table, the user taps each zone 5–10 times and the board stores the mean embedding per zone. Inference is then a nearest-prototype lookup.
@@ -139,7 +172,7 @@ Checklist:
 - [ ] Weight sharing / clustering, plus compression (zip / Huffman)
 - [ ] Activation sparsity (ReLU threshold, L1 penalty on activations)
 - [ ] Quantization: PTQ (dynamic range, float16, full int8) **vs.** QAT
-- [ ] Deployment: TFLite Micro (C++), and MicroFlow (Rust) if time allows
+- [ ] Deployment: MicroFlow (Rust) as the main path; TFLite Micro (C++) as a comparison point (latency, flash, RAM)
 - [ ] Metrics: accuracy / confusion matrix, size, peak RAM, latency, energy
 - [ ] Pareto plot: accuracy vs. size, and accuracy vs. latency
 - [ ] Classical baseline: Location Template Matching (cross-correlation + k-NN) vs. CNN, comparing both accuracy and cost
@@ -153,18 +186,19 @@ Checklist:
 
 ### Week 1: feasibility (go / no-go)
 
-- [ ] Identify the board revision (Rev1 / Rev2) of both Sense boards; get mic and IMU streaming over serial at the highest usable rates.
+- [ ] Identify the board revision (Rev1 / Rev2) of both Sense boards (the `acquisition` firmware reports it); get mic and IMU streaming over serial at the highest usable rates.
 - [ ] Data logger: firmware that streams raw samples, plus a Python script that saves labelled taps from **both boards at once** (both on USB).
+  - ✅ Written, *not yet tested on hardware*: `firmware/acquisition` (continuous mic) + `host/scripts/record.py`. IMU streaming is still TODO.
   - PC-side alignment is fine for energy ratios and fingerprints, but **not** for TDOA, because of USB jitter.
   - If we want to test TDOA, add the GPIO sync wire from day one.
 - [ ] Record **4 corners × 30 taps** on one surface, with the boards at opposite ends.
-- [ ] Plot spectrograms and gyroscope traces per zone. Can we see a difference by eye?
+- [ ] Plot spectrograms and gyroscope traces per zone. Can we see a difference by eye? (`host/notebooks/01_feasibility.ipynb`)
 - [ ] Quick k-NN / random forest on:
   - **board A only**, **board B only** and **A+B** (energy ratio plus both feature sets);
   - **mic only**, **IMU only** and **both**.
 - **Go** if above ~90 % on 4 zones. **Adopt the two-board setup** if A+B clearly beats a single board. **Otherwise**, try a lighter surface or a piezo, or pivot.
-- [ ] Minimal BLE link (ArduinoBLE): B notifies A with a small payload on each tap. Measure the latency.
-- [ ] TFLite Micro "hello world" running on the board.
+- [ ] Minimal BLE link (`trouble-host` + `nrf-sdc`): B notifies A with a small payload on each tap. Measure the latency.
+- [ ] MicroFlow model running on the board: ✅ compiles with a placeholder model (`firmware/inference`), not yet flashed.
 
 ### Week 2: data and first models
 
@@ -189,7 +223,7 @@ Checklist:
 ### Suggested split
 
 - **A:** data, models, distillation and compression (Python).
-- **B:** firmware, deployment and on-device measurements (C++ / Rust).
+- **B:** firmware, deployment and on-device measurements (Rust).
 
 Swap and review each other's work regularly.
 
@@ -205,57 +239,64 @@ Swap and review each other's work regularly.
 | Inter-board sync too poor for TDOA (BLE jitter ~ms) | Rely on energy ratio and fingerprints, which only need coarse sync; GPIO sync wire; radio timestamping as a stretch goal |
 | BLE link adds latency or drops packets | Late fusion fallback (A decides alone if B's message is late); measure the end-to-end latency |
 | Model already tiny, so little left to compress | Start from a deliberately large teacher; report the full trade-off curve |
-| Rust toolchain eats the schedule | C++ / TFLite Micro is the reference path; Rust is a parallel track, not a blocker |
+| Rust toolchain eats the schedule | Workspace already builds (acquisition + inference). Fallback: Arduino C++ / TFLite Micro for whatever blocks |
+| MicroFlow lacks an operator we need | Design the model within its op set (§7); hand-write the missing kernel in Rust; TFLite Micro as fallback |
 
 ---
 
-## 7. Rust track (optional, parallel)
+## 7. Firmware (Rust)
 
-- **HAL:** Embassy (`embassy-nrf`), which has a PDM driver and async I²C.
-- **Inference:** [MicroFlow](https://arxiv.org/abs/2409.19432) (`.tflite` → Rust at compile time, tested on nRF52840). Its operator set is limited: check that Conv1D, which TFLite lowers to Conv2D, and the pooling layers we use are supported. A hand-written int8 engine is a fallback with real teaching value.
-- **Flashing:** double-tap reset, then Arduino's fork of `bossac` (the mainline one does not work), and link after the bootloader (check the offset). Alternatively, use an SWD probe (Pi Pico + *debugprobe*) with `probe-rs`.
-- **Gotcha:** on the Sense board, sensor power and the I²C pull-ups are switched by GPIOs that the Arduino core enables silently. We must do it ourselves; check the schematic or the Arduino variant file.
+Lives in [`firmware/`](firmware/), a Cargo workspace with three crates: `board` (shared board support), `acquisition` (data collection) and `inference` (MicroFlow). Full details in [`firmware/README.md`](firmware/README.md).
+
+- **Stack:** Embassy (`embassy-nrf` 0.11, async), `embassy-usb` (CDC-ACM serial), MicroFlow (`.tflite` → Rust at compile time). For BLE later: `trouble-host` + `nrf-sdc`.
+- **Flashing without the Arduino IDE:** `cargo run --release -p <crate>` converts the ELF to `.bin`, does a "1200 baud touch" to reboot into the Arduino bootloader, and flashes with Arduino's fork of `bossac` (the mainline one does not work). The app is linked at `0x10000`, after the bootloader.
+- **No debug probe** on the board, so logs go over USB serial. An SWD probe (Pi Pico + *debugprobe*) would enable `probe-rs` + `defmt`.
+- **What the Arduino core does silently**, now done in `board`: sensor rail P0.22 (high drive), I²C pull-ups P1.00, mic power P0.17.
+
+**MicroFlow constraints** (found while compiling; not documented upstream):
+
+- Operators: `CONV_2D`, `DEPTHWISE_CONV_2D`, `FULLY_CONNECTED`, `AVERAGE_POOL_2D`, `SOFTMAX`, `RESHAPE`, `TRANSPOSE` only.
+- **No Conv1D** (Keras lowers it to `EXPAND_DIMS` / `SQUEEZE`): use Conv2D with a `(1, k)` kernel on a `(1, T, C)` input.
+- **No MaxPool, no GlobalAveragePooling** (which becomes `MEAN`): use `AveragePooling2D` over the full width, or strided convolutions.
+- **No Concat / Add**: no residual connections and no in-graph branch fusion.
+- Static batch size 1, otherwise `Flatten` emits `SHAPE` / `PACK`.
+- Dense layers must be quantized **per-tensor** (`_experimental_disable_per_channel_quantization_for_dense_layers = True`).
+- Every layer needs a bias, and an all-zero bias gets dropped by the converter. That is fine once trained; keep `use_bias=True`.
+- Activations: ReLU / ReLU6 only. BatchNorm is fine (it is folded into the conv).
+- Activations live on the **stack**: watch the stack size for bigger models.
+
+`host/scripts/export_microflow.py` applies all of this and checks the op set.
 
 ---
 
-## 8. Python environment
+## 8. Host (Python)
+
+Lives in [`host/`](host/): recording, notebooks, training and export. Details in [`host/README.md`](host/README.md).
 
 Managed with [uv](https://docs.astral.sh/uv/), on **Python 3.13**. Python 3.14+ is not an option yet: TensorFlow, ExecuTorch and the PyTorch→TFLite converter (LiteRT Torch) have no wheels for it, and LiteRT Torch has no Linux aarch64 wheels at all.
 
-PyTorch is an extra, so pick exactly one:
-
 ```sh
-uv sync --extra cpu         # CPU-only PyTorch (Linux / Windows, incl. aarch64)
-uv sync --extra cuda        # NVIDIA GPU, CUDA 12.6 wheels (x86_64)
-uv sync --extra mps         # Apple Silicon, native macOS only
-uv run jupyter lab          # or select the .venv kernel in VS Code
-uv run ruff check .         # lint
-```
-
-`tensorflow-model-optimization` (pruning / clustering) needs legacy Keras. Set this **before** importing TensorFlow:
-
-```python
-import os
-os.environ["TF_USE_LEGACY_KERAS"] = "1"
-import tensorflow as tf
+cd host
+uv sync --extra cpu         # or --extra cuda (NVIDIA, x86_64) / --extra mps (macOS): pick exactly one
+uv run jupyter lab
 ```
 
 ---
 
-## 9. Proposed repo layout
+## 9. Repo layout
 
 ```
-firmware/
-  logger/        # raw mic + IMU streaming for data collection
-  inference/     # TFLite Micro deployment (C++)
-  rust/          # optional Embassy + MicroFlow port
-data/            # recordings (large files git-ignored / LFS)
-notebooks/       # exploration, feasibility study
-training/        # teacher, student, distillation, compression scripts
-models/          # exported .tflite / .h / ONNX
-bench/           # on-device measurement scripts and results
-demo/            # Raspberry Pi side
-report/
+firmware/                Rust, runs on the Nano 33 BLE Sense (Cargo workspace)
+  board/                 pins, power-up, USB serial, bootloader entry, IMU detection
+  acquisition/           streams the microphone over USB for dataset collection
+  inference/             MicroFlow model → zone id over USB
+    models/tap.tflite    exported by host/scripts/export_microflow.py
+  scripts/flash.sh       cargo runner: objcopy + 1200 baud touch + bossac
+host/                    Python, runs on the PC (uv project)
+  src/touchwood/         shared code: serial protocol decoder, tap segmentation
+  scripts/               record.py, export_microflow.py, tflite_ops.py
+  notebooks/             01_feasibility.ipynb, then training / compression
+  data/raw/              recordings (git-ignored)
 ```
 
 ---

@@ -1,0 +1,19 @@
+[package]
+name = "inference"
+description = "On-device tap-zone inference with MicroFlow, prediction sent over USB serial"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+board.workspace = true
+embassy-executor.workspace = true
+embassy-nrf.workspace = true
+embassy-time.workspace = true
+embassy-usb.workspace = true
+cortex-m.workspace = true
+cortex-m-rt.workspace = true
+panic-halt.workspace = true
+microflow.workspace = true
+nalgebra.workspace = true

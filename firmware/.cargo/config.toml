@@ -1,0 +1,7 @@
+[build]
+target = "thumbv7em-none-eabihf"   # Cortex-M4F (nRF52840)
+
+[target.thumbv7em-none-eabihf]
+# `cargo run --release -p <crate>` converts the ELF and flashes it through the Arduino bootloader.
+runner = "scripts/flash.sh"
+rustflags = ["-C", "link-arg=-Tlink.x"]

@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = ["board", "acquisition", "inference"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+authors = ["Alix ANNERAUD <alix@anneraud.fr>"]
+license = "Apache-2.0"
+
+[workspace.dependencies]
+board = { path = "board" }
+embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
+embassy-time = "0.5"
+embassy-nrf = { version = "0.11", features = ["nrf52840", "time-driver-rtc1", "gpiote", "unstable-pac", "time"] }
+embassy-usb = "0.6"
+embassy-sync = "0.8"
+embassy-futures = "0.1"
+cortex-m = { version = "0.7.6", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7"
+panic-halt = "1"
+static_cell = "2"
+microflow = { git = "https://github.com/matteocarnelos/microflow-rs" }
+nalgebra = { version = "0.32", default-features = false, features = ["macros"] }
+
+# MicroFlow relies on a patched nalgebra (see microflow-rs Cargo.toml).
+[patch.crates-io]
+nalgebra = { git = "https://github.com/matteocarnelos/nalgebra" }
+
+[profile.release]
+codegen-units = 1
+debug = true      # debug info stays in the ELF, not in flash
+lto = true
+opt-level = "s"
+
+[profile.dev]
+opt-level = 1     # MicroFlow / nalgebra are unusably slow at opt-level 0

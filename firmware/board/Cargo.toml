@@ -1,0 +1,14 @@
+[package]
+name = "board"
+description = "Arduino Nano 33 BLE Sense support: pins, power-up, USB serial, bootloader entry"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+embassy-nrf.workspace = true
+embassy-time.workspace = true
+embassy-usb.workspace = true
+cortex-m.workspace = true
+static_cell.workspace = true
