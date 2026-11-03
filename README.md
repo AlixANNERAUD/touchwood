@@ -273,7 +273,7 @@ Lives in [`firmware/`](firmware/), a Cargo workspace with three crates: `board` 
 - **No Concat / Add**: no residual connections and no in-graph branch fusion.
 - Static batch size 1, otherwise `Flatten` emits `SHAPE` / `PACK`.
 - Dense layers must be quantized **per-tensor** (`_experimental_disable_per_channel_quantization_for_dense_layers = True`).
-- Every layer needs a bias, and an all-zero bias gets dropped by the converter. That is fine once trained; keep `use_bias=True`.
+- Every Dense layer needs a bias: the converter drops an all-zero one, and the macro then panics. That is fine once trained; keep `use_bias=True` (or use the fork with [PR #19](https://github.com/matteocarnelos/microflow-rs/pull/19)).
 - Activations: ReLU / ReLU6 only. BatchNorm is fine (it is folded into the conv).
 - Activations live on the **stack**: watch the stack size for bigger models.
 
@@ -283,13 +283,13 @@ Lives in [`firmware/`](firmware/), a Cargo workspace with three crates: `board` 
 
 | Contribution | Gain | Why it matters here |
 |---|---|---|
-| SIMD int8 kernels (Cortex-M4 DSP: `SMLAD`, dual 16-bit MAC), as in CMSIS-NN | **latency / energy**, likely the biggest | MicroFlow's kernels are generic nalgebra loops. The audio encoder costs ~0.77 M MAC per tap (IMU 0.1 M, head 3.7 k, per the TFLite converter): at a few cycles per MAC on a 64 MHz M4, that is tens of ms, *to be measured*. CMSIS-NN reports several-fold speed-ups over reference kernels on the M4 |
-| `CONCATENATION` + `ADD` | expressiveness | In-graph fusion instead of Rust glue; residual / inverted-residual blocks (MobileNetV2-style), so the student can look more like the teacher |
+| SIMD int8 kernels (Cortex-M4 DSP: `SMLAD`, dual 16-bit MAC), as in CMSIS-NN. Open upstream: [PR #16](https://github.com/matteocarnelos/microflow-rs/pull/16) (optional CMSIS-NN backend), to test on the board before writing our own | **latency / energy**, likely the biggest | MicroFlow's kernels are generic nalgebra loops. The audio encoder costs ~0.77 M MAC per tap (IMU 0.1 M, head 3.7 k, per the TFLite converter): at a few cycles per MAC on a 64 MHz M4, that is tens of ms, *to be measured*. CMSIS-NN reports several-fold speed-ups over reference kernels on the M4 |
+| `CONCATENATION` + `ADD`. Open upstream: [PR #15](https://github.com/matteocarnelos/microflow-rs/pull/15) (also `MAX_POOL_2D`, `MUL`, `PAD`, `LOGISTIC`, `TANH`, multi-branch codegen) | expressiveness | In-graph fusion instead of Rust glue; residual / inverted-residual blocks (MobileNetV2-style), so the student can look more like the teacher |
 | `MAX_POOL_2D` | accuracy / latency | Taps are transients: max pooling keeps peaks, and it is cheaper than strided convolutions for downsampling |
 | Per-channel quantization for `FULLY_CONNECTED` | accuracy | It is TensorFlow's default nowadays; per-tensor costs accuracy on small Dense layers |
 | `EXPAND_DIMS` / `SQUEEZE`, `MEAN` | ergonomics | Plain Keras `Conv1D` and `GlobalAveragePooling` would just work |
 | Static arena / in-place activations instead of the stack | RAM | Needed for bigger models or a higher sample rate |
-| Bug: an all-zero bias makes the macro panic (`idx < self.len()`) | robustness | Easy first PR: treat a missing bias as zeros |
+| Bug: an all-zero bias makes the macro panic (`idx < self.len()`) | robustness | ✅ Fixed in our [PR #19](https://github.com/matteocarnelos/microflow-rs/pull/19), from the fork [AlixANNERAUD/microflow-rs](https://github.com/AlixANNERAUD/microflow-rs). Only `FULLY_CONNECTED` was affected: the converter keeps a zero bias for the convolutions |
 
 ---
 
