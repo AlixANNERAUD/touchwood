@@ -284,5 +284,9 @@ Not in the plan, kept here for reference.
   - Downsides: very sensitive to the environment (people moving, posture), and it doubles the acquisition chain.
   - If we try it, run the same week-1 test on CSI only.
   - An alternative without new hardware is Nexmon CSI on a Raspberry Pi 3B+ / 4.
+  - Prior art: **RuView / "WiFi DensePose"**, an open-source project that went viral. It claims to estimate body pose, breathing and heart rate, even through walls, from a router plus several ESP32-S3 nodes reading CSI ([coverage](https://www.opensourceforu.com/?p=97115), [PyPI](https://pypi.org/project/wifi-densepose/2.0.0a1/), [a GitHub fork](https://github.com/meterup/ruview)).
+    - Its figures are self-reported and unverified (some, like "54K fps", look doubtful), and it is beta software.
+    - The underlying science is solid: it builds on CMU's *DensePose from WiFi* (Geng et al.).
+    - It confirms that ESP32-S3 + CSI is the right stack, but these systems sense whole-body motion with several nodes. A finger tap on a ~20 cm zone is much finer-grained.
 - **Magnetic stylus + magnetometer**: a real localisation technique, but short range (~10–20 cm) and it changes the concept.
 - **Capacitive electrodes** (copper tape under the table): proximity sensing at a few cm range; it needs several electrodes to localise.
