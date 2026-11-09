@@ -1,4 +1,4 @@
-"""int8 TFLite export for MicroFlow, and a small runner to evaluate the exported models on the PC."""
+"""int8 TFLite export for nanoglia, and a small runner to evaluate the exported models on the PC."""
 
 from __future__ import annotations
 
@@ -9,19 +9,42 @@ import warnings
 import numpy as np
 import tensorflow as tf
 
-MICROFLOW_OPS = {
+# int8 operators supported by nanoglia 0.1.1 (its documentation/reference/supported-operators.md).
+NANOGLIA_OPS = {
     "CONV_2D",
+    "TRANSPOSE_CONV",
     "DEPTHWISE_CONV_2D",
     "FULLY_CONNECTED",
     "AVERAGE_POOL_2D",
+    "MAX_POOL_2D",
     "SOFTMAX",
+    "ADD",
+    "SUB",
+    "MAXIMUM",
+    "PAD",
     "RESHAPE",
+    "CONCATENATION",
     "TRANSPOSE",
+    "SLICE",
+    "STRIDED_SLICE",
+    "GATHER",
+    "SPLIT",
+    "ARG_MAX",
+    "RESIZE_NEAREST_NEIGHBOR",
+    "RESIZE_BILINEAR",
+    "QUANTIZE",
+    "DEQUANTIZE",
+    "MEAN",
+    "RELU",
+    "LEAKY_RELU",
+    "LOGISTIC",
+    "TANH",
+    "HARD_SWISH",
 }
 
 
 def to_int8_tflite(model, calib: np.ndarray, int8_io: bool = True) -> bytes:
-    """Full-integer quantization, with the MicroFlow-specific options.
+    """Full-integer (int8) quantization.
 
     `calib`: representative inputs (a few hundred), same shape as the model input minus the batch.
     """
@@ -32,8 +55,6 @@ def to_int8_tflite(model, calib: np.ndarray, int8_io: bool = True) -> bytes:
     if int8_io:
         conv.inference_input_type = tf.int8
         conv.inference_output_type = tf.int8
-    # MicroFlow's FULLY_CONNECTED only supports per-tensor weight quantization.
-    conv._experimental_disable_per_channel_quantization_for_dense_layers = True
     # The converter prints the whole SavedModel signature; keep notebooks readable.
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -47,11 +68,11 @@ def ops(tflite: bytes) -> set[str]:
         return {o["op_name"] for o in tf.lite.Interpreter(model_content=tflite)._get_ops_details()}
 
 
-def check_microflow(tflite: bytes) -> set[str]:
-    """Raise if the model uses an operator MicroFlow does not implement."""
+def check_nanoglia(tflite: bytes) -> set[str]:
+    """Raise if the model uses an operator nanoglia does not implement."""
     used = ops(tflite)
-    if used - MICROFLOW_OPS:
-        raise ValueError(f"operators not supported by MicroFlow: {sorted(used - MICROFLOW_OPS)}")
+    if used - NANOGLIA_OPS:
+        raise ValueError(f"operators not supported by nanoglia: {sorted(used - NANOGLIA_OPS)}")
     return used
 
 

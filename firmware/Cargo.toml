@@ -20,12 +20,8 @@ cortex-m = { version = "0.7.6", features = ["inline-asm", "critical-section-sing
 cortex-m-rt = "0.7"
 panic-halt = "1"
 static_cell = "2"
-microflow = { git = "https://github.com/matteocarnelos/microflow-rs" }
-nalgebra = { version = "0.32", default-features = false, features = ["macros"] }
-
-# MicroFlow relies on a patched nalgebra (see microflow-rs Cargo.toml).
-[patch.crates-io]
-nalgebra = { git = "https://github.com/matteocarnelos/nalgebra" }
+# int8-only models: the float32 and int16 kernels are left out to save flash.
+nanoglia = { version = "0.1.1", default-features = false, features = ["cmsis-nn", "kernels"] }
 
 [profile.release]
 codegen-units = 1
@@ -34,4 +30,4 @@ lto = true
 opt-level = "s"
 
 [profile.dev]
-opt-level = 1     # MicroFlow / nalgebra are unusably slow at opt-level 0
+opt-level = 1     # inference kernels are unusably slow at opt-level 0

@@ -1,24 +1,29 @@
-//! Inference firmware: microphone window -> int8 CNN (MicroFlow) -> zone id over USB serial.
+//! Inference firmware: microphone window -> int8 CNN (nanoglia) -> zone id over USB serial.
 //!
 //! The model in `models/tap.tflite` is a placeholder (random weights) produced by
-//! `host/scripts/export_microflow.py`; replace it with a trained one.
-//! MicroFlow compiles the `.tflite` into Rust at build time: weights live in flash,
-//! activations on the stack.
+//! `host/scripts/export_tflite.py`; replace it with a trained one.
+//! nanoglia loads the `.tflite` at run time: the weights are read in place from flash, and the
+//! graph and its activations live in the static `MEMORY` arena (no heap).
 #![no_std]
 #![no_main]
 
 use board::{Irqs, UsbDriver};
 use embassy_executor::Spawner;
 use embassy_nrf::pdm::{self, Frequency, OperationMode, Pdm, Ratio};
-use embassy_time::Instant;
+use embassy_time::{Instant, Timer};
 use embassy_usb::UsbDevice;
-use microflow::buffer::Buffer4D;
-use microflow::model;
+use nanoglia::{Arena, Encoding, Graph, Target};
 use panic_halt as _;
 
-// Path is relative to the workspace root (MicroFlow reads it from rustc's working directory).
-#[model("inference/models/tap.tflite")]
-struct TapModel;
+/// The model bytes, 16-byte aligned like the TFLite converter expects.
+#[repr(C, align(16))]
+struct Aligned<T: ?Sized>(T);
+
+static MODEL: &Aligned<[u8]> = &Aligned(*include_bytes!("../models/tap.tflite"));
+
+/// Memory for the graph and its execution context: the placeholder model needs ~4.6 KB
+/// (graph 1.3 KB + context 3.3 KB). The line printed on connection gives the actual use.
+static mut MEMORY: [u8; 8 * 1024] = [0; 8 * 1024];
 
 /// Input window length in samples (must match the model input `(1, 1, WIN, 1)`).
 const WIN: usize = 400;
@@ -36,6 +41,11 @@ async fn main(spawner: Spawner) {
     let (device, mut serial) = board::usb_serial(p.USBD, "touchwood inference");
     spawner.spawn(usb_task(device).unwrap());
 
+    // SAFETY: `main` runs once and is the only user of `MEMORY`.
+    let arena = Arena::new(unsafe { &mut *core::ptr::addr_of_mut!(MEMORY) });
+    let graph = Graph::load_in(&[&MODEL.0], Encoding::Autodetect, Target::Auto, &arena);
+    let mut ctx = graph.as_ref().map_err(|e| *e).and_then(|g| g.init_execution_context_in(&arena));
+
     let config = pdm::Config {
         frequency: Frequency::_1280k, // 1.28 MHz / 80 = 16 kHz
         ratio: Ratio::Ratio80,
@@ -47,23 +57,59 @@ async fn main(spawner: Spawner) {
     let mut window = [0i16; WIN];
     loop {
         serial.wait_connection().await;
+        let ctx = match &mut ctx {
+            Ok(ctx) => ctx,
+            Err(error) => {
+                // The model cannot run: keep saying why, so it shows up in any serial monitor.
+                let line = Line::format(format_args!("model load failed: {error}\n"));
+                let _ = board::write_all(&mut serial, line.as_bytes()).await;
+                board::handle_bootloader_touch(&serial);
+                Timer::after_secs(1).await;
+                continue;
+            }
+        };
+        let line = Line::format(format_args!(
+            "nanoglia: arena {}/{} B\n",
+            arena.used(),
+            arena.capacity()
+        ));
+        if board::write_all(&mut serial, line.as_bytes()).await.is_err() {
+            continue;
+        }
+
         pdm.start().await;
         loop {
             board::handle_bootloader_touch(&serial);
             if pdm.sample(&mut window).await.is_err() {
                 break;
             }
-            // Placeholder front-end: int16 -> int8 by dropping the low byte.
-            // TODO: tap onset detection + the same normalisation as in training.
-            let input: Buffer4D<i8, 1, 1, WIN, 1> =
-                [nalgebra::SMatrix::from_fn(|_, j| [(window[j] >> 8) as i8])];
 
             let t0 = Instant::now();
-            let probs = TapModel::predict_quantized(input);
+            let result = (|| -> Result<(usize, f32), nanoglia::Error> {
+                // Placeholder front-end: int16 -> int8 by dropping the low byte.
+                // TODO: tap onset detection + the same normalisation as in training.
+                // The input is rewritten before every compute: the memory plan reuses it.
+                let mut input = ctx.input_mut(0)?;
+                for (x, s) in input.as_mut_slice::<i8>()?.iter_mut().zip(&window) {
+                    *x = (s >> 8) as i8;
+                }
+                ctx.compute()?;
+                let output = ctx.output(0)?;
+                let q = output.quantization();
+                let scores = output.as_slice::<i8>()?;
+                let zone = (0..scores.len()).max_by_key(|&i| scores[i]).unwrap_or(0);
+                let confidence = q.scale() * (i32::from(scores[zone]) - q.zero_point()) as f32;
+                Ok((zone, confidence))
+            })();
             let dt = t0.elapsed().as_micros() as u32;
 
-            let (_, zone) = probs.iamax_full(); // (row, col) of the highest probability
-            let line = Line::format(zone as u8, probs[(0, zone)] * 100.0, dt);
+            let line = match result {
+                Ok((zone, confidence)) => Line::format(format_args!(
+                    "zone={zone} conf={:.0}% t={dt}us\n",
+                    confidence * 100.0
+                )),
+                Err(error) => Line::format(format_args!("inference failed: {error}\n")),
+            };
             if board::write_all(&mut serial, line.as_bytes()).await.is_err() {
                 break;
             }
@@ -72,19 +118,16 @@ async fn main(spawner: Spawner) {
     }
 }
 
-/// `zone=<z> conf=<pct>% t=<us>us\n`, formatted without an allocator.
+/// One line of serial output, formatted without an allocator (truncated if too long).
 struct Line {
-    data: [u8; 48],
+    data: [u8; 96],
     len: usize,
 }
 
 impl Line {
-    fn format(zone: u8, confidence_pct: f32, latency_us: u32) -> Self {
-        let mut line = Line { data: [0; 48], len: 0 };
-        let _ = core::fmt::write(
-            &mut line,
-            format_args!("zone={zone} conf={:.0}% t={latency_us}us\n", confidence_pct),
-        );
+    fn format(args: core::fmt::Arguments) -> Self {
+        let mut line = Line { data: [0; 96], len: 0 };
+        let _ = core::fmt::write(&mut line, args);
         line
     }
 

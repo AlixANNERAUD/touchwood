@@ -1,10 +1,11 @@
 """Fusion model: shared per-modality encoders, one fusion head.
 
-Everything here stays inside MicroFlow's operator set once exported (see root README §7):
-Conv2D with (1, k) kernels instead of Conv1D, AveragePooling2D over the full width instead
-of global pooling, ReLU only, BatchNorm (folded at conversion). Concatenation exists only
-in the *training* graph: on the device each encoder and the head are separate models, glued
-together in Rust (concatenating the embeddings, possibly received over BLE).
+The architecture was designed for MicroFlow's small operator set: Conv2D with (1, k) kernels
+instead of Conv1D, AveragePooling2D over the full width instead of global pooling, ReLU only,
+BatchNorm (folded at conversion). nanoglia, the engine used now, supports more (CONCATENATION,
+ADD, MAX_POOL_2D, MEAN...; see root README §7), so these choices are no longer required.
+Each encoder and the head are still separate models, glued together in Rust (concatenating the
+embeddings, possibly received over BLE), which matches the two-board split.
 
 Encoders are shared between boards (same weights for A and B), so both boards can run the
 same firmware.
@@ -30,7 +31,7 @@ def _conv_bn_relu(x, filters: int, k: int, stride: int = 1, name: str = ""):
 
 def _dw_separable(x, filters: int, k: int, stride: int, name: str):
     # TensorFlow cannot train a DepthwiseConv2D with unequal strides such as (1, 2) on CPU,
-    # so downsample with an average pooling instead (cheap, and in MicroFlow's op set).
+    # so downsample with an average pooling instead (cheap).
     x = layers.DepthwiseConv2D((1, k), use_bias=True, name=f"{name}_dw")(x)
     x = layers.BatchNormalization(name=f"{name}_dw_bn")(x)
     x = layers.ReLU(name=f"{name}_dw_relu")(x)
@@ -40,7 +41,7 @@ def _dw_separable(x, filters: int, k: int, stride: int, name: str):
 
 
 def _global_pool(x, dim: int, name: str):
-    """Global average pooling expressed as AveragePooling2D (MicroFlow has no MEAN op)."""
+    """Global average pooling expressed as AveragePooling2D (lowers to AVERAGE_POOL_2D, not MEAN)."""
     x = layers.AveragePooling2D((1, x.shape[2]), name=f"{name}_pool")(x)
     return layers.Reshape((dim,), name=f"{name}_flat")(x)
 
@@ -165,7 +166,7 @@ def features(
 
 
 def for_export(part: keras.Model, builder, **kwargs) -> keras.Model:
-    """Rebuild a trained sub-model with a static batch size of 1 (MicroFlow requirement)."""
+    """Rebuild a trained sub-model with a static batch size of 1 (otherwise Flatten/Reshape emit SHAPE / PACK)."""
     fixed = builder(batch_size=1, **kwargs)
     fixed.set_weights(part.get_weights())
     return fixed

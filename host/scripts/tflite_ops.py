@@ -1,4 +1,4 @@
-"""Print the operators and tensor shapes of .tflite files (handy to check MicroFlow compatibility).
+"""Print the operators and tensor shapes of .tflite files (handy to check nanoglia compatibility).
 
 Usage: uv run python scripts/tflite_ops.py model.tflite [...]
 """

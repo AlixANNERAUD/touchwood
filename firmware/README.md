@@ -6,7 +6,7 @@ Rust firmware for the Arduino Nano 33 BLE Sense (nRF52840), with no Arduino IDE 
 |---|---|---|
 | `board` | lib | Board support: pins, sensor power-up, USB serial, bootloader entry, IMU detection |
 | `acquisition` | bin | Streams the microphone continuously over USB serial, for dataset collection |
-| `inference` | bin | Microphone window → int8 CNN ([MicroFlow](https://github.com/matteocarnelos/microflow-rs)) → zone id over USB serial |
+| `inference` | bin | Microphone window → int8 CNN ([nanoglia](https://github.com/AlixANNERAUD/nanoglia)) → zone id over USB serial |
 
 **Status:** everything builds; **nothing has been tested on a board yet**.
 
@@ -15,7 +15,7 @@ Size at the latest build (release):
 | Crate | Flash | Static RAM |
 |---|---|---|
 | `acquisition` | ~19 KB | ~8.7 KB |
-| `inference` | ~34 KB | ~3.2 KB |
+| `inference` | ~183 KB | ~12 KB (8 KB of it is the nanoglia arena) |
 
 Both are out of 960 KB of flash available to the app and 256 KB of RAM.
 
@@ -82,12 +82,14 @@ At 16 kHz, 32 KB/s of audio goes over USB full speed easily. Capture never block
 
 TODO: stream the IMU (after checking the board revision), and add a sync input pin for TDOA.
 
-## inference: MicroFlow
+## inference: nanoglia
 
-- [`inference/models/tap.tflite`](inference/models/tap.tflite) is a **placeholder** (random weights) exported by `host/scripts/export_microflow.py`.
-- `host/notebooks/02_training.ipynb` exports the real pipeline as three models into `inference/models/`: `audio_encoder.tflite`, `imu_encoder.tflite` and `head.tflite`. All three compile with MicroFlow (checked: ~11 KB of int8 weights plus ~17 KB of code). They are not wired into `inference` yet.
-- Re-exporting rebuilds the firmware automatically, through `build.rs`.
-- The model path in `#[model(...)]` is relative to the **workspace root**: MicroFlow reads it from rustc's working directory.
+- [`inference/models/tap.tflite`](inference/models/tap.tflite) is a **placeholder** (random weights) exported by `host/scripts/export_tflite.py`.
+- `host/notebooks/02_training.ipynb` exports the real pipeline as three models into `inference/models/`: `audio_encoder.tflite`, `imu_encoder.tflite` and `head.tflite`. They are not wired into `inference` yet.
+- The model is embedded with `include_bytes!` and **loaded at run time** by nanoglia (`Graph::load_in`): the weights are read in place from flash, the graph and activations live in a static 8 KB `Arena` (the placeholder needs ~4.6 KB; grow it for the real models) (no heap). Re-exporting the model rebuilds the firmware.
+- Because loading happens at run time, a model could later come over BLE or serial instead of being built in.
+- On connection, the firmware prints `nanoglia: arena <used>/<capacity> B` (use it to shrink the arena), or `model load failed: <reason>` if the model is rejected.
+- Flash grows from ~34 KB (MicroFlow) to ~183 KB: the price of a general runtime plus the CMSIS-NN kernels.
 - The op-set constraints are listed in the root README (§7). The export script checks them.
 - Output: one line per window, `zone=<z> conf=<p>% t=<latency>us`.
 

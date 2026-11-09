@@ -13,10 +13,10 @@ uv run ruff check .
 | `src/touchwood/protocol.py` | Decoder for the `acquisition` firmware frames (resyncs on garbage) |
 | `src/touchwood/taps.py` | Energy-based tap onset detection, windowing, and pairing of the same taps seen by two boards |
 | `src/touchwood/dataset.py` | Recordings → tap dataset, synthetic stand-in, and `prepare()`, the input normalisation the firmware must reproduce |
-| `src/touchwood/model.py` | Shared encoders + fusion head (MicroFlow-compatible), branch dropout, export helpers |
-| `src/touchwood/export.py` | int8 TFLite conversion with the MicroFlow options, op-set check, and a PC runner for int8 models |
+| `src/touchwood/model.py` | Shared encoders + fusion head (small int8 op set), branch dropout, export helpers |
+| `src/touchwood/export.py` | int8 TFLite conversion op-set check against nanoglia, and a PC runner for int8 models |
 | `scripts/record.py` | Guided recording from one or two boards at once: random zone order, tap counting, quality checks, session log (`takes.csv`) |
-| `scripts/export_microflow.py` | Keras → int8 `.tflite` that MicroFlow accepts, written to `firmware/inference/models/` |
+| `scripts/export_tflite.py` | Keras → int8 `.tflite` checked against nanoglia's operators, written to `firmware/inference/models/` |
 | `scripts/tflite_ops.py` | List the operators and shapes of `.tflite` files |
 | `notebooks/01_feasibility.ipynb` | Week-1 go / no-go: tap segmentation, plots, k-NN / random forest per zone |
 | `notebooks/02_training.ipynb` | Joint training of the fusion model, ablations, frozen vs. unfrozen calibration, int8 export of the three parts |

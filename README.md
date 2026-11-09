@@ -109,7 +109,7 @@ A third board would make 2D TDOA possible. That is a stretch goal, not the basel
 
 ### 3.2 Model architecture
 
-Shaped by MicroFlow's operator set (see [§7](#7-firmware-rust)). Since there is no Concat op, there is **one model per branch, and the fusion happens in Rust**, which also matches the BLE split-computing design.
+Originally shaped by MicroFlow's operator set (see [§7](#7-firmware-rust)), which had no Concat op: there is **one model per branch, and the fusion happens in Rust**. That still matches the BLE split-computing design. nanoglia, the engine now used, would also allow fusion inside one model.
 
 ```mermaid
 flowchart LR
@@ -136,7 +136,7 @@ flowchart LR
     end
 ```
 
-- **Student:** ~12 k parameters (audio encoder 6 k, IMU encoder 2 k, head 3.5 k). Trained on synthetic data, then exported and compiled with MicroFlow: ~11 KB of int8 weights plus ~17 KB of code, for the whole pipeline.
+- **Student:** ~12 k parameters (audio encoder 6 k, IMU encoder 2 k, head 3.5 k). Trained on synthetic data, then exported to int8: ~11 KB of int8 weights for the whole pipeline.
 - **Downsampling in the depthwise blocks** is an `AveragePooling2D((1, 2))` after a stride-1 depthwise conv, because TensorFlow cannot train a `DepthwiseConv2D` with unequal strides like `(1, 2)` on CPU.
 - **Per-board normalisation:** each board normalises its window by its own peak, so it can run its encoder alone. The peak is kept as a `loge` feature, so the head still sees the energy ratio between boards.
 - **Training strategy** (`host/notebooks/02_training.ipynb`): **joint end-to-end training**, plus auxiliary per-branch classifiers and *branch dropout* (randomly zeroing a whole modality or board) against modality competition. This also makes the head robust to a missing board. The encoders are **frozen only for few-shot calibration** on a new session, for fair comparisons of fusion strategies, and for part-by-part compression. On synthetic data, calibrating with 5 taps per zone: frozen encoders 99.9 % vs. everything unfrozen 96.5 %, because the unfrozen model overfits.
@@ -184,7 +184,7 @@ Checklist:
 - [ ] Weight sharing / clustering, plus compression (zip / Huffman)
 - [ ] Activation sparsity (ReLU threshold, L1 penalty on activations)
 - [ ] Quantization: PTQ (dynamic range, float16, full int8) **vs.** QAT
-- [ ] Deployment: MicroFlow (Rust) as the main path; TFLite Micro (C++) as a comparison point (latency, flash, RAM)
+- [ ] Deployment: nanoglia (Rust) as the main path; TFLite Micro (C++) as a comparison point (latency, flash, RAM)
 - [ ] Metrics: accuracy / confusion matrix, size, peak RAM, latency, energy
 - [ ] Pareto plot: accuracy vs. size, and accuracy vs. latency
 - [ ] Classical baseline: Location Template Matching (cross-correlation + k-NN) vs. CNN, comparing both accuracy and cost
@@ -210,7 +210,7 @@ Checklist:
   - **mic only**, **IMU only** and **both**.
 - **Go** if above ~90 % on 4 zones. **Adopt the two-board setup** if A+B clearly beats a single board. **Otherwise**, try a lighter surface or a piezo, or pivot.
 - [ ] Minimal BLE link (`trouble-host` + `nrf-sdc`): B notifies A with a small payload on each tap. Measure the latency.
-- [ ] MicroFlow model running on the board: ✅ compiles with a placeholder model (`firmware/inference`), not yet flashed.
+- [ ] nanoglia model running on the board: ✅ compiles with a placeholder model (`firmware/inference`), not yet flashed.
 
 ### Week 2: data and first models
 
@@ -252,44 +252,42 @@ Swap and review each other's work regularly.
 | BLE link adds latency or drops packets | Late fusion fallback (A decides alone if B's message is late); measure the end-to-end latency |
 | Model already tiny, so little left to compress | Start from a deliberately large teacher; report the full trade-off curve |
 | Rust toolchain eats the schedule | Workspace already builds (acquisition + inference). Fallback: Arduino C++ / TFLite Micro for whatever blocks |
-| MicroFlow lacks an operator we need | Design the model within its op set (§7); hand-write the missing kernel in Rust; TFLite Micro as fallback |
+| nanoglia lacks an operator we need | Design the model within its op set (§7); add the kernel to nanoglia (custom backend); TFLite Micro as fallback |
 
 ---
 
 ## 7. Firmware (Rust)
 
-Lives in [`firmware/`](firmware/), a Cargo workspace with three crates: `board` (shared board support), `acquisition` (data collection) and `inference` (MicroFlow). Full details in [`firmware/README.md`](firmware/README.md).
+Lives in [`firmware/`](firmware/), a Cargo workspace with three crates: `board` (shared board support), `acquisition` (data collection) and `inference` (nanoglia). Full details in [`firmware/README.md`](firmware/README.md).
 
-- **Stack:** Embassy (`embassy-nrf` 0.11, async), `embassy-usb` (CDC-ACM serial), MicroFlow (`.tflite` → Rust at compile time). For BLE later: `trouble-host` + `nrf-sdc`.
+- **Stack:** Embassy (`embassy-nrf` 0.11, async), `embassy-usb` (CDC-ACM serial), nanoglia (`.tflite` loaded at run time, CMSIS-NN kernels). For BLE later: `trouble-host` + `nrf-sdc`.
 - **Flashing without the Arduino IDE:** `cargo run --release -p <crate>` converts the ELF to `.bin`, does a "1200 baud touch" to reboot into the Arduino bootloader, and flashes with Arduino's fork of `bossac` (the mainline one does not work). The app is linked at `0x10000`, after the bootloader.
 - **No debug probe** on the board, so logs go over USB serial. An SWD probe (Pi Pico + *debugprobe*) would enable `probe-rs` + `defmt`.
 - **What the Arduino core does silently**, now done in `board`: sensor rail P0.22 (high drive), I²C pull-ups P1.00, mic power P0.17.
 
-**MicroFlow constraints** (found while compiling; not documented upstream):
+**Inference engine: [nanoglia](https://github.com/AlixANNERAUD/nanoglia)** (0.1.1, `cmsis-nn` + `kernels`, int8 only). It loads the `.tflite` at run time from flash, runs it bit-exact with TensorFlow Lite, uses the CMSIS-NN kernels (Cortex-M4 DSP) where they apply, and takes all its memory from a static arena. It replaced MicroFlow, which compiled the model into Rust at build time but had a much smaller operator set and no hardware kernels.
 
-- Operators: `CONV_2D`, `DEPTHWISE_CONV_2D`, `FULLY_CONNECTED`, `AVERAGE_POOL_2D`, `SOFTMAX`, `RESHAPE`, `TRANSPOSE` only.
-- **No Conv1D** (Keras lowers it to `EXPAND_DIMS` / `SQUEEZE`): use Conv2D with a `(1, k)` kernel on a `(1, T, C)` input.
-- **No MaxPool, no GlobalAveragePooling** (which becomes `MEAN`): use `AveragePooling2D` over the full width, or strided convolutions.
-- **No Concat / Add**: no residual connections and no in-graph branch fusion.
+**Model constraints:**
+
+- **int8 operators supported by nanoglia:** `CONV_2D`, `DEPTHWISE_CONV_2D`, `TRANSPOSE_CONV`, `FULLY_CONNECTED`, `AVERAGE_POOL_2D`, `MAX_POOL_2D`, `MEAN`, `SOFTMAX`, `ADD`, `SUB`, `MAXIMUM`, `CONCATENATION`, `PAD`, `RESHAPE`, `TRANSPOSE`, `SLICE`, `STRIDED_SLICE`, `GATHER`, `SPLIT`, `ARG_MAX`, `RESIZE_*`, `QUANTIZE`, `DEQUANTIZE`, `RELU`, `LEAKY_RELU`, `LOGISTIC`, `TANH`, `HARD_SWISH`. So Concat, Add (residuals), MaxPool and global average pooling (`MEAN`) are now available.
+- Still **no `EXPAND_DIMS` / `SQUEEZE`**, so Keras `Conv1D` does not export as is: keep Conv2D with a `(1, k)` kernel on a `(1, T, C)` input.
 - Static batch size 1, otherwise `Flatten` emits `SHAPE` / `PACK`.
-- Dense layers must be quantized **per-tensor** (`_experimental_disable_per_channel_quantization_for_dense_layers = True`).
-- Every Dense layer needs a bias: the converter drops an all-zero one, and the macro then panics. That is fine once trained; keep `use_bias=True` (or use the fork with [PR #19](https://github.com/matteocarnelos/microflow-rs/pull/19)).
-- Activations: ReLU / ReLU6 only. BatchNorm is fine (it is folded into the conv).
-- Activations live on the **stack**: watch the stack size for bigger models.
+- Dense layers can use TensorFlow's default **per-channel** quantization (MicroFlow needed per-tensor).
+- Memory is known ahead of time: one arena block for the graph and one for the execution context, nothing per inference. The firmware prints the arena use on connection.
 
-`host/scripts/export_microflow.py` applies all of this and checks the op set.
+The current student was designed for MicroFlow's smaller op set (no Concat, no Add, no MaxPool) and still respects it; those restrictions can now be lifted (in-graph fusion, residual blocks, max pooling for transient peaks).
 
-**MicroFlow contribution candidates**, by expected value for this project. Measure first: time each layer on the board with the DWT cycle counter before choosing.
+`host/scripts/export_tflite.py` exports int8 models and checks the op set.
 
-| Contribution | Gain | Why it matters here |
+**Engine work left, by expected value for this project.** Measure first: time each layer on the board (`compute_with` gives a per-operator hook) with the DWT cycle counter.
+
+| Item | Gain | Why it matters here |
 |---|---|---|
-| SIMD int8 kernels (Cortex-M4 DSP: `SMLAD`, dual 16-bit MAC), as in CMSIS-NN. Open upstream: [PR #16](https://github.com/matteocarnelos/microflow-rs/pull/16) (optional CMSIS-NN backend), to test on the board before writing our own | **latency / energy**, likely the biggest | MicroFlow's kernels are generic nalgebra loops. The audio encoder costs ~0.77 M MAC per tap (IMU 0.1 M, head 3.7 k, per the TFLite converter): at a few cycles per MAC on a 64 MHz M4, that is tens of ms, *to be measured*. CMSIS-NN reports several-fold speed-ups over reference kernels on the M4 |
-| `CONCATENATION` + `ADD`. Open upstream: [PR #15](https://github.com/matteocarnelos/microflow-rs/pull/15) (also `MAX_POOL_2D`, `MUL`, `PAD`, `LOGISTIC`, `TANH`, multi-branch codegen) | expressiveness | In-graph fusion instead of Rust glue; residual / inverted-residual blocks (MobileNetV2-style), so the student can look more like the teacher |
-| `MAX_POOL_2D` | accuracy / latency | Taps are transients: max pooling keeps peaks, and it is cheaper than strided convolutions for downsampling |
-| Per-channel quantization for `FULLY_CONNECTED` | accuracy | It is TensorFlow's default nowadays; per-tensor costs accuracy on small Dense layers |
-| `EXPAND_DIMS` / `SQUEEZE`, `MEAN` | ergonomics | Plain Keras `Conv1D` and `GlobalAveragePooling` would just work |
-| Static arena / in-place activations instead of the stack | RAM | Needed for bigger models or a higher sample rate |
-| Bug: an all-zero bias makes the macro panic (`idx < self.len()`) | robustness | ✅ Fixed in our [PR #19](https://github.com/matteocarnelos/microflow-rs/pull/19), from the fork [AlixANNERAUD/microflow-rs](https://github.com/AlixANNERAUD/microflow-rs). Only `FULLY_CONNECTED` was affected: the converter keeps a zero bias for the convolutions |
+| Validate the CMSIS-NN DSP path on real hardware ([nanoglia issue #2](https://github.com/AlixANNERAUD/nanoglia/issues/2)) | **correctness / latency** | Built in CI but not yet run on a board. The audio encoder costs ~0.77 M MAC per tap (IMU 0.1 M, head 3.7 k, per the TFLite converter) |
+| Size the arena for the real models | RAM | 8 KB reserved; the placeholder needs ~4.6 KB (graph 1.3 KB + context 3.3 KB). Grow it when the three exported models are wired in |
+| Flash size | flash | ~183 KB vs. ~34 KB with MicroFlow; still far below the 960 KB available. Fine unless a second large model is added |
+
+MicroFlow history: we found and fixed one bug there (an all-zero Dense bias made the macro panic), [PR #19](https://github.com/matteocarnelos/microflow-rs/pull/19), approved upstream. It no longer affects this project.
 
 ---
 
@@ -313,12 +311,12 @@ uv run jupyter lab
 firmware/                Rust, runs on the Nano 33 BLE Sense (Cargo workspace)
   board/                 pins, power-up, USB serial, bootloader entry, IMU detection
   acquisition/           streams the microphone over USB for dataset collection
-  inference/             MicroFlow model → zone id over USB
-    models/tap.tflite    exported by host/scripts/export_microflow.py
+  inference/             nanoglia model → zone id over USB
+    models/tap.tflite    exported by host/scripts/export_tflite.py
   scripts/flash.sh       cargo runner: objcopy + 1200 baud touch + bossac
 host/                    Python, runs on the PC (uv project)
   src/touchwood/         shared code: protocol, taps, dataset, model, export
-  scripts/               record.py, export_microflow.py, tflite_ops.py
+  scripts/               record.py, export_tflite.py, tflite_ops.py
   notebooks/             01_feasibility.ipynb, 02_training.ipynb, then distillation / compression
   data/raw/              recordings (git-ignored)
 ```
@@ -330,7 +328,8 @@ host/                    Python, runs on the PC (uv project)
 - Knock&Tap: classification and localisation of knock and tap gestures (4-mic array): <https://pure.seoultech.ac.kr/en/publications/knockamptap-classification-and-localization-of-knock-and-tap-gest/>
 - MIT, Passive acoustic sensing for tracking knocks on large displays: <https://aspirin.media.mit.edu/responsive/wp-content/uploads/sites/4/2013/12/Passive-Acoustic-Sensing-for-Tracking-Knocks-Atop-Large-Interactive-Displays.pdf>
 - TapLock, tap detection with an accelerometer on a Nano 33 BLE Sense: <https://www.hackster.io/taplock/taplock-a-bike-lock-with-machine-learning-85641c>
-- MicroFlow, a Rust TinyML inference engine: <https://arxiv.org/abs/2409.19432>
+- nanoglia, the TFLite runtime used in the firmware: <https://github.com/AlixANNERAUD/nanoglia>
+- MicroFlow, the Rust TinyML engine used before nanoglia: <https://arxiv.org/abs/2409.19432>
 - Burn, `no_std` mode: <https://burn.dev/books/burn/advanced/no-std.html>
 - Zephyr board notes for the Nano 33 BLE (flashing, bossac): <https://developer.nordicsemi.com/nRF_Connect_SDK/doc-legacy/1.6.1/zephyr/boards/arm/arduino_nano_33_ble/doc/index.html>
 - Course material: TinyML, quantization, pruning / clustering (TP3), knowledge distillation (TP4)
