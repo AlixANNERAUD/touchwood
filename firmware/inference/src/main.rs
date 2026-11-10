@@ -7,7 +7,7 @@
 #![no_std]
 #![no_main]
 
-use board::{Irqs, UsbDriver};
+use board::{Irqs, Line, UsbDriver};
 use embassy_executor::Spawner;
 use embassy_nrf::pdm::{self, Frequency, OperationMode, Pdm, Ratio};
 use embassy_time::{Instant, Timer};
@@ -44,7 +44,10 @@ async fn main(spawner: Spawner) {
     // SAFETY: `main` runs once and is the only user of `MEMORY`.
     let arena = Arena::new(unsafe { &mut *core::ptr::addr_of_mut!(MEMORY) });
     let graph = Graph::load_in(&[&MODEL.0], Encoding::Autodetect, Target::Auto, &arena);
-    let mut ctx = graph.as_ref().map_err(|e| *e).and_then(|g| g.init_execution_context_in(&arena));
+    let mut ctx = graph
+        .as_ref()
+        .map_err(|e| *e)
+        .and_then(|g| g.init_execution_context_in(&arena));
 
     let config = pdm::Config {
         frequency: Frequency::_1280k, // 1.28 MHz / 80 = 16 kHz
@@ -104,10 +107,9 @@ async fn main(spawner: Spawner) {
             let dt = t0.elapsed().as_micros() as u32;
 
             let line = match result {
-                Ok((zone, confidence)) => Line::format(format_args!(
-                    "zone={zone} conf={:.0}% t={dt}us\n",
-                    confidence * 100.0
-                )),
+                Ok((zone, confidence)) => {
+                    Line::format(format_args!("zone={zone} conf={:.0}% t={dt}us\n", confidence * 100.0))
+                }
                 Err(error) => Line::format(format_args!("inference failed: {error}\n")),
             };
             if board::write_all(&mut serial, line.as_bytes()).await.is_err() {
@@ -115,33 +117,5 @@ async fn main(spawner: Spawner) {
             }
         }
         pdm.stop().await;
-    }
-}
-
-/// One line of serial output, formatted without an allocator (truncated if too long).
-struct Line {
-    data: [u8; 96],
-    len: usize,
-}
-
-impl Line {
-    fn format(args: core::fmt::Arguments) -> Self {
-        let mut line = Line { data: [0; 96], len: 0 };
-        let _ = core::fmt::write(&mut line, args);
-        line
-    }
-
-    fn as_bytes(&self) -> &[u8] {
-        &self.data[..self.len]
-    }
-}
-
-impl core::fmt::Write for Line {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let bytes = s.as_bytes();
-        let n = bytes.len().min(self.data.len() - self.len);
-        self.data[self.len..self.len + n].copy_from_slice(&bytes[..n]);
-        self.len += n;
-        Ok(())
     }
 }

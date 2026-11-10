@@ -313,10 +313,11 @@ firmware/                Rust, runs on the Nano 33 BLE Sense (Cargo workspace)
   acquisition/           streams the microphone over USB for dataset collection
   inference/             nanoglia model → zone id over USB
     models/tap.tflite    exported by host/scripts/export_tflite.py
+  gesture/               TP 5: accelerometer gestures with nanoglia (side test of the stack)
   scripts/flash.sh       cargo runner: objcopy + 1200 baud touch + bossac
 host/                    Python, runs on the PC (uv project)
   src/touchwood/         shared code: protocol, taps, dataset, model, export
-  scripts/               record.py, export_tflite.py, tflite_ops.py
+  scripts/               record.py, export_tflite.py, tp5_gesture.py, tflite_ops.py
   notebooks/             01_feasibility.ipynb, 02_training.ipynb, then distillation / compression
   data/raw/              recordings (git-ignored)
 ```

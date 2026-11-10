@@ -569,6 +569,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gesture"
+version = "0.1.0"
+dependencies = [
+ "board",
+ "cortex-m",
+ "cortex-m-rt",
+ "embassy-executor",
+ "embassy-nrf",
+ "embassy-time",
+ "embassy-usb",
+ "nanoglia",
+ "panic-halt",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

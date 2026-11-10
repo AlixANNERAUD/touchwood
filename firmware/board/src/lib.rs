@@ -107,6 +107,34 @@ pub async fn write_all(serial: &mut Serial, data: &[u8]) -> Result<(), embassy_u
     Ok(())
 }
 
+/// One line of serial output, formatted without an allocator (truncated past 128 bytes).
+pub struct Line {
+    data: [u8; 128],
+    len: usize,
+}
+
+impl Line {
+    pub fn format(args: core::fmt::Arguments) -> Self {
+        let mut line = Line { data: [0; 128], len: 0 };
+        let _ = core::fmt::write(&mut line, args);
+        line
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.data[..self.len]
+    }
+}
+
+impl core::fmt::Write for Line {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let bytes = s.as_bytes();
+        let n = bytes.len().min(self.data.len() - self.len);
+        self.data[self.len..self.len + n].copy_from_slice(&bytes[..n]);
+        self.len += n;
+        Ok(())
+    }
+}
+
 /// Reboot into the Arduino bootloader if the host opened the port at 1200 baud,
 /// so `bossac` can flash without a double tap on reset.
 pub fn handle_bootloader_touch(serial: &Serial) {

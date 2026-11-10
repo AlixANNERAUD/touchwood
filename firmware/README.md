@@ -7,6 +7,7 @@ Rust firmware for the Arduino Nano 33 BLE Sense (nRF52840), with no Arduino IDE 
 | `board` | lib | Board support: pins, sensor power-up, USB serial, bootloader entry, IMU detection |
 | `acquisition` | bin | Streams the microphone continuously over USB serial, for dataset collection |
 | `inference` | bin | Microphone window → int8 CNN ([nanoglia](https://github.com/AlixANNERAUD/nanoglia)) → zone id over USB serial |
+| `gesture` | bin | TP 5: accelerometer gestures (idle, up_down, side, forward) with nanoglia, see [`gesture/README.md`](gesture/README.md) |
 
 **Status:** everything builds; **nothing has been tested on a board yet**.
 
@@ -16,6 +17,7 @@ Size at the latest build (release):
 |---|---|---|
 | `acquisition` | ~19 KB | ~8.7 KB |
 | `inference` | ~183 KB | ~12 KB (8 KB of it is the nanoglia arena) |
+| `gesture` | ~210 KB | ~8.3 KB (4 KB of it is the nanoglia arena) |
 
 Both are out of 960 KB of flash available to the app and 256 KB of RAM.
 
