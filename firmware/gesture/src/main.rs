@@ -5,10 +5,15 @@
 //! 1. model information, like MicroTFLite's `ModelPrint*` functions (section 3.1);
 //! 2. the fixed test windows of `test_windows.rs`, one line per window with the probabilities and
 //!    the latency, to compare with the reference ones printed by the host script (section 3.2);
-//! 3. real-time classification: the LSM9DS1 accelerometer sampled at 100 Hz, in g, one prediction
-//!    per WINDOW samples (section 4).
+//! 3. real-time classification from the LSM9DS1, one prediction per WINDOW rows (section 4).
 //!
-//! `models/gesture_model.tflite` and `src/test_windows.rs` come from `host/scripts/tp5_gesture.py`.
+//! `models/gesture_model.tflite` and `src/test_windows.rs` (with WINDOW and the class order) come
+//! from `host/scripts/tp5_gesture.py`.
+//!
+//! The TP 2 recordings are not what the TP describes (accelerometer in g at 100 Hz): they are the
+//! gyroscope in dps (steps of 2000/32768), logged at ~422 rows/s from a sensor running at 119 Hz,
+//! each value repeated 3 or 4 times. Real time reproduces that logger: the gyroscope output is read
+//! every 2.37 ms whether or not it holds a new measurement.
 #![no_std]
 #![no_main]
 
@@ -22,18 +27,16 @@ use embassy_usb::driver::EndpointError;
 use embassy_usb::UsbDevice;
 use nanoglia::{Arena, DataType, Encoding, Graph, Target, TensorDesc};
 use panic_halt as _;
-use test_windows::{N_TEST, TEST_LABELS, TEST_WINDOWS};
+use test_windows::{CLASSES, N_TEST, TEST_LABELS, TEST_WINDOWS, WINDOW};
 
-/// Window size of TP 2 (samples at 100 Hz).
-const WINDOW: usize = 50;
 const N_AXES: usize = 3;
 /// Size of the flattened input, interleaved: x0, y0, z0, x1, y1, z1, ...
 const N_INPUTS: usize = WINDOW * N_AXES;
-const N_CLASSES: usize = 4;
-/// Order of the classes in y at TP 2.
-const CLASSES: [&str; N_CLASSES] = ["idle", "up_down", "side", "forward"];
-/// 100 Hz, imposed by us: the LSM9DS1 itself runs at 119 Hz.
-const SAMPLE_PERIOD: Duration = Duration::from_micros(10_000);
+const N_CLASSES: usize = CLASSES.len();
+// The lines printed below show four probabilities.
+const _: () = assert!(N_CLASSES == 4);
+/// Row period of the TP 2 recordings: 119 Hz x 3.55 rows per measurement = ~422 rows/s.
+const SAMPLE_PERIOD: Duration = Duration::from_micros(2_370);
 
 /// The model bytes, 16-byte aligned like the TFLite converter expects (the `alignas(16)` of
 /// `gesture_model.h`).
@@ -42,10 +45,10 @@ struct Aligned<T: ?Sized>(T);
 
 static MODEL: &Aligned<[u8]> = &Aligned(*include_bytes!("../models/gesture_model.tflite"));
 
-/// Working memory of the interpreter (the TP's `tensorArena`): the stand-in model uses ~1.6 KB
-/// (graph 1.4 KB + context 0.2 KB), so used + ~1 KB as in section 3.1, rounded up. The connection
-/// message gives the bytes used by the actual model: adjust if `Arena used` gets close.
-static mut MEMORY: [u8; 4 * 1024] = [0; 4 * 1024];
+/// Working memory of the interpreter (the TP's `tensorArena`): the TP 2 model uses 16.8 KB (graph
+/// 2.3 KB + context 14.4 KB, measured with nanoglia on the PC), so used + ~1 KB as in section 3.1.
+/// The connection message gives the bytes used: adjust if another model gets close.
+static mut MEMORY: [u8; 18 * 1024] = [0; 18 * 1024];
 
 /// Format and send one line; `?` on it ends the session when the host closes the port.
 macro_rules! say {
@@ -162,7 +165,10 @@ async fn session<A: nanoglia::Allocator, B: nanoglia::Allocator>(
         )?;
         return wait_forever(serial).await;
     }
-    say!(serial, "\r\n-- Real time (100 Hz, {WINDOW} samples per window) --\r\n")?;
+    say!(
+        serial,
+        "\r\n-- Real time (gyroscope, {WINDOW} rows of 2.37 ms per window) --\r\n"
+    )?;
     let mut buffer = [[0f32; N_AXES]; WINDOW];
     let mut n_samples = 0;
     let mut flat = [0f32; N_INPUTS];
@@ -170,15 +176,15 @@ async fn session<A: nanoglia::Allocator, B: nanoglia::Allocator>(
     loop {
         ticker.next().await;
         board::handle_bootloader_touch(serial);
-        // As in the TP's skeleton: no new measurement at this tick, no sample.
-        let Ok(Some(acc)) = lsm9ds1::read_acceleration(i2c).await else {
+        // Like the TP 2 logger: one row per tick, repeating the last measurement until the next one.
+        let Ok(rate) = lsm9ds1::read_gyroscope(i2c).await else {
             continue;
         };
-        buffer[n_samples] = acc;
+        buffer[n_samples] = rate;
         n_samples += 1;
         if n_samples == WINDOW {
             n_samples = 0;
-            // Raw values in g, no normalisation, flattened interleaved like at training.
+            // Raw values in dps, no normalisation, flattened interleaved like at training.
             for (i, sample) in buffer.iter().enumerate() {
                 flat[i * N_AXES..(i + 1) * N_AXES].copy_from_slice(sample);
             }
@@ -280,31 +286,24 @@ async fn wait_forever(serial: &mut Serial) -> Result<(), EndpointError> {
     }
 }
 
-/// The LSM9DS1 accelerometer, configured like the `Arduino_LSM9DS1` library.
+/// The LSM9DS1 gyroscope, configured like the `Arduino_LSM9DS1` library.
 mod lsm9ds1 {
     use embassy_nrf::twim::{Error, Twim};
 
     const ADDRESS: u8 = 0x6B;
-    const CTRL_REG6_XL: u8 = 0x20;
-    const STATUS_REG: u8 = 0x17;
-    const OUT_X_XL: u8 = 0x28;
+    const CTRL_REG1_G: u8 = 0x10;
+    const OUT_X_G: u8 = 0x18;
 
-    /// 119 Hz, +/-4 g, as `IMU.begin()`.
+    /// 119 Hz, +/-2000 dps, as `IMU.begin()`.
     pub async fn init(i2c: &mut Twim<'static>) -> Result<(), Error> {
-        i2c.write(ADDRESS, &[CTRL_REG6_XL, 0x70]).await
+        i2c.write(ADDRESS, &[CTRL_REG1_G, 0x78]).await
     }
 
-    /// `IMU.accelerationAvailable()` then `IMU.readAcceleration(x, y, z)`: `None` when no new
-    /// measurement is ready, otherwise (x, y, z) in g.
-    pub async fn read_acceleration(i2c: &mut Twim<'static>) -> Result<Option<[f32; 3]>, Error> {
-        let mut status = [0u8; 1];
-        i2c.write_read(ADDRESS, &[STATUS_REG], &mut status).await?;
-        if status[0] & 0x01 == 0 {
-            return Ok(None);
-        }
+    /// `IMU.readGyroscope(x, y, z)`: the latest measurement in dps, new or not.
+    pub async fn read_gyroscope(i2c: &mut Twim<'static>) -> Result<[f32; 3], Error> {
         let mut raw = [0u8; 6];
-        i2c.write_read(ADDRESS, &[OUT_X_XL], &mut raw).await?;
-        let g = |i: usize| f32::from(i16::from_le_bytes([raw[i], raw[i + 1]])) * 4.0 / 32768.0;
-        Ok(Some([g(0), g(2), g(4)]))
+        i2c.write_read(ADDRESS, &[OUT_X_G], &mut raw).await?;
+        let dps = |i: usize| f32::from(i16::from_le_bytes([raw[i], raw[i + 1]])) * 2000.0 / 32768.0;
+        Ok([dps(0), dps(2), dps(4)])
     }
 }
