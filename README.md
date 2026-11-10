@@ -309,6 +309,7 @@ uv run jupyter lab
 ## 9. Repo layout
 
 ```
+mise.toml                tools, system packages and tasks: `mise run setup`, `mise tasks`
 firmware/                Rust, runs on the Nano 33 BLE Sense (Cargo workspace)
   board/                 pins, power-up, USB serial, bootloader entry, IMU detection
   acquisition/           streams the microphone over USB for dataset collection

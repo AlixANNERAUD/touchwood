@@ -1,0 +1,78 @@
+# Development environment of touchwood: `mise install` for the tools, `mise bootstrap packages apply`
+# for the system packages (C cross toolchain), `mise tasks` for the tasks.
+
+[tools]
+# Firmware target, `llvm-tools` for rust-objcopy. `mr_boxington` routes Cargo through mbx, a shared
+# build cache: the C objects of CMSIS-NN (nanoglia) and the build-script outputs are restored
+# instead of recompiled.
+rust = { version = "stable", components = "llvm-tools", targets = "thumbv7em-none-eabihf", mr_boxington = true }
+mr-boxington = "latest"
+"cargo:cargo-binutils" = "latest" # rust-objcopy, used by firmware/scripts/flash.sh
+uv = "latest"
+
+# Arduino's fork of bossac: the mainline one cannot flash the Nano 33 BLE through its bootloader.
+[tools."http:bossac"]
+version = "1.9.1-arduino2"
+bin_path = "bin"
+
+[tools."http:bossac".platforms]
+linux-x64 = { url = "https://downloads.arduino.cc/tools/bossac-{{version}}-linux64.tar.gz" }
+linux-arm64 = { url = "https://downloads.arduino.cc/tools/bossac-{{version}}-linuxaarch64.tar.gz" }
+macos-x64 = { url = "https://downloads.arduino.cc/tools/bossac-{{version}}-osx.tar.gz" }
+macos-arm64 = { url = "https://downloads.arduino.cc/tools/bossac-{{version}}-osx.tar.gz" }
+
+# C cross toolchain for CMSIS-NN, compiled by nanoglia-cmsis-nn-sys with `cc`. Only its headers are
+# used (stdint.h, string.h...): nothing links the C library.
+[bootstrap.packages]
+"apt:gcc-arm-none-eabi" = { os = "linux" }
+"apt:libnewlib-arm-none-eabi" = { os = "linux" }
+
+# How `cc` finds that toolchain (Debian / Ubuntu paths).
+[env]
+CC_thumbv7em_none_eabihf = "arm-none-eabi-gcc"
+AR_thumbv7em_none_eabihf = "arm-none-eabi-ar"
+CFLAGS_thumbv7em_none_eabihf = "-isystem /usr/include/newlib"
+
+[tasks.setup]
+description = "Install everything: tools, system packages (sudo), Python environment (CPU torch)"
+run = [
+  "mise install",
+  "mise bootstrap packages apply",
+  "cd host && uv sync --extra cpu",
+]
+
+[tasks.doctor]
+description = "Check that the firmware can be built and flashed from this machine"
+run = """
+ok=1
+for tool in arm-none-eabi-gcc rust-objcopy bossac uv; do
+  if command -v "$tool" >/dev/null; then echo "ok      $tool"; else echo "missing $tool"; ok=0; fi
+done
+if [ -e /usr/include/newlib/string.h ]; then echo "ok      newlib headers"; else echo "missing newlib headers (libnewlib-arm-none-eabi)"; ok=0; fi
+if [ "$(uname)" = Linux ] && ! id -nG | grep -qw dialout; then
+  echo "missing dialout group: sudo usermod -aG dialout $USER, then log in again"; ok=0
+fi
+ls /dev/ttyACM* /dev/cu.usbmodem* 2>/dev/null | sed 's/^/board   /' || true
+[ "$ok" = 1 ]
+"""
+
+[tasks.build]
+description = "Build every firmware crate (release)"
+dir = "{{config_root}}/firmware"
+run = "cargo build --release"
+
+[tasks.flash]
+description = "Build, flash and reset a firmware crate through the Arduino bootloader (PORT=/dev/ttyACMx to choose the port)"
+usage = 'arg "<crate>" help="gesture, inference or acquisition"'
+dir = "{{config_root}}/firmware"
+run = "cargo run --release -p ${usage_crate?}"
+
+[tasks.monitor]
+description = "Open the serial console of the board (PORT=/dev/ttyACMx to choose the port; Ctrl+] quits)"
+dir = "{{config_root}}/host"
+run = "uv run python -m serial.tools.miniterm --eol LF ${PORT:-/dev/ttyACM0} 115200"
+
+[tasks.tp5]
+description = "TP 5: retrain the TP 2 gesture model from host/data/tp2 and export it with its test windows to firmware/gesture"
+dir = "{{config_root}}/host"
+run = "uv run python scripts/tp5_gesture.py"

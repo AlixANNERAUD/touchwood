@@ -71,8 +71,8 @@ uv run python scripts/tp5_gesture.py --tflite model_int8.tflite --test-windows t
 ## Run
 
 ```sh
-cd firmware
-cargo run --release -p gesture     # build, flash through the Arduino bootloader
+mise run flash gesture     # or, from firmware/: cargo run --release -p gesture
+mise run monitor
 ```
 
 Open the serial port (any baud rate: it is USB). On each connection the firmware prints:

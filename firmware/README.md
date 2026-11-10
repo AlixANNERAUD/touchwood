@@ -23,17 +23,33 @@ Both are out of 960 KB of flash available to the app and 256 KB of RAM.
 
 ## Setup
 
+With [mise](https://mise.jdx.dev) (`mise.toml` at the repo root), from anywhere in the repo:
+
+```sh
+mise trust && mise run setup   # Rust + target, mbx build cache, rust-objcopy, Arduino's bossac, uv,
+                               # then gcc-arm-none-eabi + newlib through apt (sudo), then the Python env
+mise run doctor                # what is still missing to build and flash
+mise run flash gesture         # build, flash, reset (gesture, inference or acquisition)
+mise run monitor               # serial console (PORT=/dev/ttyACM1 to choose the port)
+```
+
+What it installs, to do it by hand instead:
+
 ```sh
 rustup target add thumbv7em-none-eabihf      # also pinned in rust-toolchain.toml
 
+# C cross toolchain: nanoglia compiles CMSIS-NN with it (only the headers of newlib are used)
+sudo apt install gcc-arm-none-eabi libnewlib-arm-none-eabi
+
 # Arduino's fork of bossac (the mainline one cannot flash this board), no IDE needed:
-curl -LO https://downloads.arduino.cc/tools/bossac-1.9.1-arduino2-linuxaarch64.tar.gz   # or ...-linux64.tar.gz on x86_64
-tar xf bossac-*.tar.gz && sudo install bossac /usr/local/bin/   # or set BOSSAC=/path/to/bossac
+curl -LO https://downloads.arduino.cc/tools/bossac-1.9.1-arduino2-linuxaarch64.tar.gz   # or ...-linux64 / -osx
+tar xf bossac-*.tar.gz && install -D bin/bossac ~/.local/bin/bossac   # or set BOSSAC=/path/to/bossac
 
 # objcopy: any of rust-objcopy (cargo install cargo-binutils), llvm-objcopy, arm-none-eabi-objcopy
 ```
 
-On Linux, your user needs access to `/dev/ttyACM*` (the `dialout` group on Debian).
+On Linux, your user needs access to `/dev/ttyACM*` (the `dialout` group on Debian): `sudo usermod -aG dialout $USER`,
+then log in again. `mise run doctor` checks it.
 
 ## Build and flash
 
