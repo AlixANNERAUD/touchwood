@@ -16,8 +16,8 @@ Size at the latest build (release):
 | Crate | Flash | Static RAM |
 |---|---|---|
 | `acquisition` | ~19 KB | ~8.7 KB |
-| `inference` | ~183 KB | ~12 KB (8 KB of it is the nanoglia arena) |
-| `gesture` | ~290 KB (80 KB of it is the model) | ~26 KB (18 KB of it is the nanoglia arena) |
+| `inference` | ~249 KB | ~12 KB (8 KB of it is the nanoglia arena) |
+| `gesture` | ~344 KB (80 KB of it is the model) | ~26 KB (18 KB of it is the nanoglia arena) |
 
 Both are out of 960 KB of flash available to the app and 256 KB of RAM.
 
@@ -91,7 +91,7 @@ TODO: stream the IMU (after checking the board revision), and add a sync input p
 - The model is embedded with `include_bytes!` and **loaded at run time** by nanoglia (`Graph::load_in`): the weights are read in place from flash, the graph and activations live in a static 8 KB `Arena` (the placeholder needs ~4.6 KB; grow it for the real models) (no heap). Re-exporting the model rebuilds the firmware.
 - Because loading happens at run time, a model could later come over BLE or serial instead of being built in.
 - On connection, the firmware prints `nanoglia: arena <used>/<capacity> B` (use it to shrink the arena), or `model load failed: <reason>` if the model is rejected.
-- Flash grows from ~34 KB (MicroFlow) to ~183 KB: the price of a general runtime plus the CMSIS-NN kernels.
+- Flash grows from ~34 KB (MicroFlow) to ~249 KB with nanoglia 0.2.0 (~183 KB with 0.1.1): the price of a general runtime, the CMSIS-NN kernels and every Rust kernel, linked because the model is only known at run time.
 - The op-set constraints are listed in the root README (§7). The export script checks them.
 - Output: one line per window, `zone=<z> conf=<p>% t=<latency>us`.
 

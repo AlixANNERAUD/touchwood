@@ -265,12 +265,13 @@ Lives in [`firmware/`](firmware/), a Cargo workspace with three crates: `board` 
 - **No debug probe** on the board, so logs go over USB serial. An SWD probe (Pi Pico + *debugprobe*) would enable `probe-rs` + `defmt`.
 - **What the Arduino core does silently**, now done in `board`: sensor rail P0.22 (high drive), I²C pull-ups P1.00, mic power P0.17.
 
-**Inference engine: [nanoglia](https://github.com/AlixANNERAUD/nanoglia)** (0.1.1, `cmsis-nn` + `kernels`, int8 only). It loads the `.tflite` at run time from flash, runs it bit-exact with TensorFlow Lite, uses the CMSIS-NN kernels (Cortex-M4 DSP) where they apply, and takes all its memory from a static arena. It replaced MicroFlow, which compiled the model into Rust at build time but had a much smaller operator set and no hardware kernels.
+**Inference engine: [nanoglia](https://github.com/AlixANNERAUD/nanoglia)** (0.2.0, `cmsis-nn` + `kernels`, int8 only). It loads the `.tflite` at run time from flash, runs it bit-exact with TensorFlow Lite, uses the CMSIS-NN kernels (Cortex-M4 DSP) where they apply, and takes all its memory from a static arena. It replaced MicroFlow, which compiled the model into Rust at build time but had a much smaller operator set and no hardware kernels.
 
 **Model constraints:**
 
-- **int8 operators supported by nanoglia:** `CONV_2D`, `DEPTHWISE_CONV_2D`, `TRANSPOSE_CONV`, `FULLY_CONNECTED`, `AVERAGE_POOL_2D`, `MAX_POOL_2D`, `MEAN`, `SOFTMAX`, `ADD`, `SUB`, `MAXIMUM`, `CONCATENATION`, `PAD`, `RESHAPE`, `TRANSPOSE`, `SLICE`, `STRIDED_SLICE`, `GATHER`, `SPLIT`, `ARG_MAX`, `RESIZE_*`, `QUANTIZE`, `DEQUANTIZE`, `RELU`, `LEAKY_RELU`, `LOGISTIC`, `TANH`, `HARD_SWISH`. So Concat, Add (residuals), MaxPool and global average pooling (`MEAN`) are now available.
-- Still **no `EXPAND_DIMS` / `SQUEEZE`**, so Keras `Conv1D` does not export as is: keep Conv2D with a `(1, k)` kernel on a `(1, T, C)` input.
+- **59 operators run on int8** with our features (list in `host/src/touchwood/export.py`, from nanoglia's [supported operators](https://github.com/AlixANNERAUD/nanoglia/blob/v0.2.0/documentation/reference/supported-operators.md)): convolutions (incl. depthwise and transposed), Dense, average / max pooling, `MEAN`, `SOFTMAX`, `ADD` / `SUB` / `MUL`, `CONCATENATION`, `PAD`, layout ops, activations... So Concat, Add (residuals), MaxPool and global average pooling are available.
+- Since 0.2.0, `EXPAND_DIMS` / `SQUEEZE` too: Keras `Conv1D` exports as is (Conv2D with a `(1, k)` kernel still works).
+- Not on int8 without the `float` feature: `DIV`, `EXP`, `LOG`, `NEG`, `SQRT`.
 - Static batch size 1, otherwise `Flatten` emits `SHAPE` / `PACK`.
 - Dense layers can use TensorFlow's default **per-channel** quantization (MicroFlow needed per-tensor).
 - Memory is known ahead of time: one arena block for the graph and one for the execution context, nothing per inference. The firmware prints the arena use on connection.
@@ -285,7 +286,7 @@ The current student was designed for MicroFlow's smaller op set (no Concat, no A
 |---|---|---|
 | Validate the CMSIS-NN DSP path on real hardware ([nanoglia issue #2](https://github.com/AlixANNERAUD/nanoglia/issues/2)) | **correctness / latency** | Built in CI but not yet run on a board. The audio encoder costs ~0.77 M MAC per tap (IMU 0.1 M, head 3.7 k, per the TFLite converter) |
 | Size the arena for the real models | RAM | 8 KB reserved; the placeholder needs ~4.6 KB (graph 1.3 KB + context 3.3 KB). Grow it when the three exported models are wired in |
-| Flash size | flash | ~183 KB vs. ~34 KB with MicroFlow; still far below the 960 KB available. Fine unless a second large model is added |
+| Flash size | flash | ~249 KB with nanoglia 0.2.0 (~183 KB with 0.1.1, ~34 KB with MicroFlow): every kernel of the enabled backends is linked, since the model is only known at run time. Still far below the 960 KB available |
 
 MicroFlow history: we found and fixed one bug there (an all-zero Dense bias made the macro panic), [PR #19](https://github.com/matteocarnelos/microflow-rs/pull/19), approved upstream. It no longer affects this project.
 

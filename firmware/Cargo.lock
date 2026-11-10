@@ -704,9 +704,9 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "nanoglia"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79475bd01a31b1d86c7e41ff240e6603d9d128fbd5934ae26c14e3e83fb2cc22"
+checksum = "c845100fd4f9c4dea0b02257bf01f28fb201982c1f19e396051002cd0ca84a4a"
 dependencies = [
  "nanoglia-cmsis-nn",
  "nanoglia-core",
@@ -716,9 +716,9 @@ dependencies = [
 
 [[package]]
 name = "nanoglia-cmsis-nn"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4e10447485af9095ee99b735632b8797658078cea1bd2c73d77c0ae35970d91"
+checksum = "838c896f612701820aaf64415bb630cc30b6cee3d59306b1412fa9bba4f175e8"
 dependencies = [
  "nanoglia-cmsis-nn-sys",
  "nanoglia-core",
@@ -726,27 +726,27 @@ dependencies = [
 
 [[package]]
 name = "nanoglia-cmsis-nn-sys"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68c937221d3b410e5d9f5275b605984abae5d2f441413bccd94ca24c9a80c3d7"
+checksum = "4990efefb997dcf0e3c409c840aa3eba37290150ad72de42de55eb3fa5d3d7ab"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "nanoglia-core"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5de46b724719abf47143ca842e44abf1a70c3e49b43f4c1c4c46d2fc8d06a235"
+checksum = "84ea3c7ba6e8f827e16478f497e33b9e79ac4f937e30095498d0a61751238e12"
 dependencies = [
  "allocator-api2",
 ]
 
 [[package]]
 name = "nanoglia-kernels"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bc84f572880c76a5a07e7105933c70a2033b857131abd760e9f62b938eb467d"
+checksum = "05f844906b4aa56230d49c709dc29af59fb762f3da55297e47f57c8248100565"
 dependencies = [
  "libm",
  "nanoglia-core",
@@ -754,9 +754,9 @@ dependencies = [
 
 [[package]]
 name = "nanoglia-tflite"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7586176754f5f95b8b4a1c9b35b6bd49b4bb78d6104c9af18efd31811999ec3"
+checksum = "ad8c661f7b9484248ffd8f6b262de5aabe3febaafbb60a7214575470c59bdcd3"
 dependencies = [
  "nanoglia-core",
 ]
