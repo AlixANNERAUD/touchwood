@@ -20,8 +20,9 @@ cortex-m = { version = "0.7.6", features = ["inline-asm", "critical-section-sing
 cortex-m-rt = "0.7"
 panic-halt = "1"
 static_cell = "2"
-# int8-only models: the float32 and int16 kernels are left out to save flash.
-nanoglia = { version = "0.2.0", default-features = false, features = ["cmsis-nn", "kernels"] }
+# int8-only models: the float32 and int16 kernels are left out to save flash. Each crate names the
+# `op-*` features of its model's operators (`host/scripts/export_tflite.py` prints them).
+nanoglia = { version = "0.3.0", default-features = false, features = ["cmsis-nn", "kernels"] }
 
 [profile.release]
 codegen-units = 1

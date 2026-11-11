@@ -86,7 +86,7 @@ A Rev2 board (BMI270 instead of the LSM9DS1) runs parts 1 and 2 only and says so
 
 ## Checked so far (no board yet)
 
-- Builds (nanoglia 0.2.0): ~344 KB flash (80 KB of it is the model), ~26 KB static RAM (18 KB of it is the arena).
+- Builds (nanoglia 0.3.0, only the model's operators): ~208 KB flash (80 KB of it is the model), ~26 KB static RAM (18 KB of it is the arena).
 - The same `.tflite` and test windows run through nanoglia **on the PC** give exactly the TensorFlow Lite
   probabilities: 7 of the 8 operators on CMSIS-NN (`conv2d_s8`, `max_pool2d_s8`, `fully_connected_s8`,
   `softmax_s8`), the reshape in Rust; graph 2.3 KB + context 14.4 KB.

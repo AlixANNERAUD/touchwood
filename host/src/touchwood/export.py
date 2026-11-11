@@ -9,7 +9,7 @@ import warnings
 import numpy as np
 import tensorflow as tf
 
-# Operators nanoglia 0.2.0 runs on int8 tensors without its `float` / `int16` features
+# Operators nanoglia 0.3.0 runs on int8 tensors without its `float` / `int16` features
 # (its documentation/reference/supported-operators.md). `nanoglia check` gives the exact kernels.
 NANOGLIA_OPS = {
     "ABS",

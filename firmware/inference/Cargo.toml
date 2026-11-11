@@ -15,4 +15,5 @@ embassy-usb.workspace = true
 cortex-m.workspace = true
 cortex-m-rt.workspace = true
 panic-halt.workspace = true
-nanoglia.workspace = true
+# The operators of the placeholder model: add the ones of the trained model.
+nanoglia = { workspace = true, features = ["op-conv-2d", "op-average-pool-2d", "op-fully-connected", "op-softmax"] }

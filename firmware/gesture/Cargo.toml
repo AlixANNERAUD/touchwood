@@ -1,6 +1,6 @@
 [package]
 name = "gesture"
-description = "TP 5: gesture classification (idle, up_down, side, forward) from the LSM9DS1 accelerometer with nanoglia"
+description = "TP 5: gesture classification (idle, up_down, side, forward) from the LSM9DS1 gyroscope with nanoglia"
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
@@ -15,5 +15,15 @@ embassy-usb.workspace = true
 cortex-m.workspace = true
 cortex-m-rt.workspace = true
 panic-halt.workspace = true
-# `float` too: a TP 2 model exported with float32 input/output (QUANTIZE / DEQUANTIZE) also runs.
-nanoglia = { workspace = true, features = ["float"] }
+# The operators of the TP 2 CNN. `float`, QUANTIZE and DEQUANTIZE: a TP 2 model exported with float32
+# input / output also runs.
+nanoglia = { workspace = true, features = [
+  "op-conv-2d",
+  "op-max-pool-2d",
+  "op-reshape",
+  "op-fully-connected",
+  "op-softmax",
+  "float",
+  "op-quantize",
+  "op-dequantize",
+] }
